@@ -189,15 +189,17 @@ router.post("/v1/refunds", auditAction("CREATE_REFUND"), requirePermission("fina
   });
 ```
 
-An invalid or missing body stops the request with HTTP 400 before any handler or connector runs:
+An invalid or missing body stops the request with HTTP 400 before any handler or connector runs. It uses
+the shared error envelope, with field-level issues in `details` (`ValidationErrorDetails`):
 
 ```json
-{ "error": "ValidationError",
-  "issues": [{ "path": ["currency"], "field": "currency", "code": "invalid_format", "message": "Must be a 3-letter ISO-4217 currency code, e.g. USD" }] }
+{ "error": { "code": "VALIDATION_FAILED", "message": "Request body failed validation",
+  "details": { "issues": [{ "path": ["currency"], "field": "currency", "code": "invalid_format",
+    "message": "Must be a 3-letter ISO-4217 currency code, e.g. USD" }] } } }
 ```
 
-The body type is `ValidationErrorBody`. The app `api-client.ts` files raise it as a `BffError` with code
-`VALIDATION_FAILED` and the issues as `details`, and the audit trail records it as a `VALIDATION_FAILED` failure.
+Apps receive it as a `BffError` with code `VALIDATION_FAILED`, and the audit trail records it as a
+`VALIDATION_FAILED` failure.
 
 ## Security posture
 
@@ -322,8 +324,7 @@ services/<team>/src/
 ```
 
 Every service returns errors in the same envelope, `{ "error": { "code", "message", "details?" } }`
-(`ApiErrorBody`). The one exception is `validateBody`, which returns `{ "error": "ValidationError", "issues" }`
-(`ValidationErrorBody`). Apps receive both as `BffError`.
+(`ApiErrorBody`). Apps receive these errors as `BffError`.
 
 **Throw:**
 

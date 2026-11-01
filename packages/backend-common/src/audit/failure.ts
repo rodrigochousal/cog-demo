@@ -23,15 +23,11 @@ export function toAuditFailure(error: unknown): AuditFailure {
 }
 
 /**
- * Derives an audit failure from an error response body — the shared
- * `{ error: { code, message, details } }` envelope or `validateBody`'s
- * `{ error: "ValidationError", issues }` — falling back to the HTTP status.
+ * Derives an audit failure from an error response body in the shared
+ * `{ error: { code, message, details } }` envelope, falling back to the HTTP status.
  */
 export function failureFromResponse(status: number, body: unknown): AuditFailure {
   const fallbackMessage = STATUS_CODES[status] ?? "Request failed";
-  if (isRecord(body) && body.error === "ValidationError" && Array.isArray(body.issues)) {
-    return withDetails("VALIDATION_FAILED", "Request validation failed", body.issues);
-  }
   if (isRecord(body) && isRecord(body.error) && typeof body.error.code === "string") {
     const { code, message, details } = body.error;
     return withDetails(code, typeof message === "string" ? message : fallbackMessage, details);

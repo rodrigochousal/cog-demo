@@ -1,4 +1,4 @@
-import type { ValidationErrorBody, ValidationIssue } from "@platform/shared-types";
+import type { ValidationErrorDetails, ValidationIssue } from "@platform/shared-types";
 import type { Request, RequestHandler } from "express";
 import { z } from "zod";
 import { HttpError } from "./errors.js";
@@ -37,18 +37,20 @@ export function toValidationIssues(issues: readonly z.core.$ZodIssue[]): Validat
   });
 }
 
-export const validationErrorBody = (error: z.ZodError): ValidationErrorBody => ({
-  error: "ValidationError",
-  issues: toValidationIssues(error.issues),
-});
+/** The `VALIDATION_FAILED` 400 that `validateBody` raises; rendered by the shared error handler. */
+export function bodyValidationError(error: z.ZodError): HttpError {
+  const details: ValidationErrorDetails = { issues: toValidationIssues(error.issues) };
+  return new HttpError(400, "VALIDATION_FAILED", "Request body failed validation", details);
+}
 
 /**
  * Express middleware factory for the strict data-contract layer. On POST/PUT/PATCH it parses
  * `req.body` with `schema` and replaces `req.body` with the parsed output (whitespace trimmed,
  * defaults applied, unknown keys stripped). Other methods pass through untouched.
  *
- * An invalid or missing body short-circuits with HTTP 400 and
- * `{ "error": "ValidationError", "issues": [...] }`; downstream handlers never run.
+ * An invalid or missing body short-circuits to the error handler with HTTP 400 and the shared
+ * envelope `{ "error": { "code": "VALIDATION_FAILED", "message", "details": { "issues": [...] } } }`;
+ * downstream handlers never run.
  * The parsed type flows into the next handlers on the same route:
  *
  *   router.post("/v1/refunds", validateBody(refundTransactionSchema), (req, res) => {
@@ -65,7 +67,7 @@ export function validateBody<S extends AnyZodObject>(
     }
     const result = schema.safeParse(req.body);
     if (!result.success) {
-      res.status(400).json(validationErrorBody(result.error));
+      next(bodyValidationError(result.error));
       return;
     }
     req.body = result.data;

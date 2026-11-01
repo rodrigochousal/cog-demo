@@ -1,6 +1,11 @@
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { refundTransactionSchema, type RefundTransaction, type ValidationErrorBody } from "@platform/shared-types";
+import {
+  refundTransactionSchema,
+  type ApiErrorBody,
+  type RefundTransaction,
+  type ValidationErrorDetails,
+} from "@platform/shared-types";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   auditAction,
@@ -51,6 +56,14 @@ beforeAll(async () => {
 });
 afterAll(() => server.close());
 
+/** Reads a validation 400 and returns its issues. */
+async function issuesOf(res: Response) {
+  const body = (await res.json()) as ApiErrorBody;
+  expect(res.status).toBe(400);
+  expect(body.error).toMatchObject({ code: "VALIDATION_FAILED", message: "Request body failed validation" });
+  return (body.error.details as ValidationErrorDetails).issues;
+}
+
 const send = (method: string, path: string, body?: string, contentType = "application/json") =>
   fetch(`${base}${path}`, {
     method,
@@ -75,16 +88,14 @@ describe("validateBody", () => {
       "/api/refunds/rf_0001",
       JSON.stringify({ ...validRefund, amount: -1, currency: "dollars", approvalsReceived: ["a", "a"], id: undefined }),
     );
-    const body = (await res.json()) as ValidationErrorBody;
-    expect(res.status).toBe(400);
-    expect(body.error).toBe("ValidationError");
-    expect(body.issues.map((i) => [i.field, i.code])).toEqual([
+    const issues = await issuesOf(res);
+    expect(issues.map((i) => [i.field, i.code])).toEqual([
       ["id", "invalid_type"],
       ["amount", "too_small"],
       ["currency", "invalid_format"],
       ["approvalsReceived.1", "custom"],
     ]);
-    expect(body.issues[3]).toMatchObject({ path: ["approvalsReceived", 1], message: "Duplicate approver 'a'" });
+    expect(issues[3]).toMatchObject({ path: ["approvalsReceived", 1], message: "Duplicate approver 'a'" });
     expect(reached).not.toHaveBeenCalled();
   });
 
@@ -94,18 +105,14 @@ describe("validateBody", () => {
   ])("rejects %s as a body-level issue", async (_label, body, contentType) => {
     reached.mockClear();
     const res = await send("POST", "/api/refunds", body, contentType);
-    const json = (await res.json()) as ValidationErrorBody;
-    expect(res.status).toBe(400);
-    expect(json.issues).toEqual([expect.objectContaining({ path: [], field: "(body)", code: "invalid_type" })]);
+    expect(await issuesOf(res)).toEqual([expect.objectContaining({ path: [], field: "(body)", code: "invalid_type" })]);
     expect(reached).not.toHaveBeenCalled();
   });
 
   it("reports every required field when the body is empty", async () => {
     reached.mockClear();
     const res = await send("POST", "/api/refunds", "{}");
-    const json = (await res.json()) as ValidationErrorBody;
-    expect(res.status).toBe(400);
-    expect(json.issues.map((i) => i.field)).toEqual(["id", "amount", "status", "currency", "customerId", "createdTimestamp"]);
+    expect((await issuesOf(res)).map((i) => i.field)).toEqual(["id", "amount", "status", "currency", "customerId", "createdTimestamp"]);
     expect(reached).not.toHaveBeenCalled();
   });
 
@@ -121,7 +128,7 @@ describe("validateBody", () => {
     expect(audits[0]).toMatchObject({
       action: "CREATE_REFUND",
       status: "FAILED",
-      error: { code: "VALIDATION_FAILED", details: [expect.objectContaining({ field: "amount" })] },
+      error: { code: "VALIDATION_FAILED", details: { issues: [expect.objectContaining({ field: "amount" })] } },
     });
   });
 });

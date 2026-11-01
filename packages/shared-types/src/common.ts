@@ -46,8 +46,7 @@ export interface ValidationIssue {
   message: string;
 }
 
-/** HTTP 400 body sent by `validateBody` when a request body fails its schema. */
-export interface ValidationErrorBody {
-  error: "ValidationError";
+/** `error.details` of the `VALIDATION_FAILED` (HTTP 400) envelope sent by `validateBody`. */
+export interface ValidationErrorDetails {
   issues: ValidationIssue[];
 }
