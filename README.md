@@ -159,6 +159,37 @@ router.get("/refunds", requirePermission("finance", "read"), listRefunds);
 router.post("/refunds/:id/execute", requirePermission("finance", "execute"), executeRefund);
 ```
 
+## Audit trail
+
+Every POST, PUT, PATCH and DELETE handled by any BFF writes one audit line to stdout as single-line JSON. In production a log agent such as Datadog Agent or Fluent Bit would scrape these lines and ship them to immutable storage. The engine is in `packages/backend-common/src/audit`. `createServiceApp` mounts `auditLogger` for every service and uses the service `name` as `targetService`. To customise it, pass `audit: { ... }`. To turn it off, pass `audit: false`.
+
+```json
+{"kind":"audit","timestamp":"2026-11-01T12:00:00.000Z","actorId":"mock-finance_analyst","actorRole":"finance_analyst","targetService":"finance-service","endpoint":"/api/v1/refunds/:id/execute","action":"EXECUTE_REFUND","status":"SUCCESS","delta":{"oldValue":{"status":"PENDING"},"newValue":{"status":"EXECUTED"}},"method":"POST","httpStatus":200,"requestId":"…","durationMs":3.2}
+```
+
+- **Outcome.** 2xx and 3xx responses are `SUCCESS`. 4xx and 5xx responses are `FAILED`, and `error` is taken from the response body. That covers zod/`parseOrThrow` 400s, RBAC 403s, unknown roles, malformed JSON and unknown routes. A client disconnect is recorded as `FAILED` with `CLIENT_CLOSED_REQUEST`. Calling `useAudit(req).fail(err)` forces `FAILED`.
+- **Actor.** The actor comes from `req.user`. If the request is rejected before an identity is attached, the actor is `anonymous`.
+- **Delta.** `computeDelta(old, new)` is pure. A create gives `{ oldValue: null, newValue: <record> }`. A delete gives `{ oldValue: <record>, newValue: null }`. An update keeps only the changed keys on both sides and keeps the nested structure. Keys such as `password`, `token` and `cardNumber` (see `DEFAULT_REDACT_KEYS`) are written as `"[REDACTED]"`.
+- **Non-blocking.** The line is written with `setImmediate` after the response is sent. If auditing throws, the error is logged and the request is unaffected.
+
+Handlers add business context. `auditAction` names the action and should come first so that RBAC and validation failures are still labelled. `useAudit(req)` returns the trail for recording snapshots. It throws if the audit middleware isn't mounted, so a mutation can't silently skip its audit line. Snapshots are synchronous copies, so you can take them inside `transact()`:
+
+```ts
+import { auditAction, requirePermission, useAudit } from "@platform/backend-common";
+
+router.post("/v1/refunds/:id/execute", auditAction("EXECUTE_REFUND"), requirePermission("finance", "execute"), (req, res) => {
+  const audit = useAudit(req);
+  const refund = refunds.transact((draft) => {
+    const refund = draft[req.params.id];
+    audit.before(refund);
+    refund.status = "EXECUTED";
+    audit.after(refund);
+    return refund;
+  });
+  res.json(refund);
+});
+```
+
 ## Getting started
 
 Prerequisites: Node.js ≥ 20.9 (see `.nvmrc`) and pnpm, which you can enable with `corepack enable`.
@@ -214,7 +245,7 @@ apps/<team>/src/
 
 services/<team>/src/
   index.ts                Process entry point (port, graceful shutdown)
-  app.ts                  createServiceApp(): CORS, JSON, logging, /health, 404, error envelope
+  app.ts                  createServiceApp(): CORS, audit, JSON, logging, /health, 404, error envelope
   config.ts               PORT / APP_ORIGINS
   routes/index.ts         Screen-shaped endpoints mounted at /api
 ```
