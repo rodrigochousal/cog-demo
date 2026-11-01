@@ -1,7 +1,10 @@
 import { z } from "zod";
 import { isoDateTimeSchema, recordIdSchema, requiredText, uniqueArray } from "./primitives.js";
 
-/** API contract for a feature flag on the engineering console (apps/engineering ↔ services/engineering). */
+/**
+ * Client-only row of the engineering feature-flag console, as services/engineering returns it
+ * to apps/engineering. The BFF maps the backend `FeatureFlag` (whatever provider serves it) to this.
+ */
 
 const MAX_FLAG_KEY_LENGTH = 64;
 
@@ -13,7 +16,7 @@ export const featureFlagKeySchema = z
   .max(MAX_FLAG_KEY_LENGTH, `Must be at most ${MAX_FLAG_KEY_LENGTH} characters`)
   .regex(/^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$/, "Must be snake_case, e.g. instant_payouts");
 
-export const featureFlagSchema = z.object({
+export const featureFlagRowSchema = z.object({
   id: recordIdSchema,
   key: featureFlagKeySchema,
   description: requiredText(1000),
@@ -24,7 +27,5 @@ export const featureFlagSchema = z.object({
   updatedAt: isoDateTimeSchema,
 });
 
-/** A validated feature flag (schema output: trimmed). Named `…Record` to avoid clashing with the provider's `FeatureFlag`. */
-export type FeatureFlagRecord = z.infer<typeof featureFlagSchema>;
-/** What a client may send before parsing. */
-export type FeatureFlagRecordInput = z.input<typeof featureFlagSchema>;
+/** A validated feature-flag row (schema output: trimmed). */
+export type FeatureFlagRow = z.infer<typeof featureFlagRowSchema>;

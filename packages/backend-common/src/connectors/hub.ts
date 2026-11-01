@@ -32,12 +32,6 @@ interface ConnectorMap {
 
 type Instance<N extends ConnectorName> = ConnectorMap[N] & InitializableConnector;
 
-const DATA_FILES: Record<ConnectorName, string> = {
-  ledger: "ledger.json",
-  kyc: "kyc-vendor.json",
-  featureFlags: "feature-flags.json",
-};
-
 let overrides: Partial<ConnectorSettings> = {};
 let instances: { [N in ConnectorName]?: Instance<N> } = {};
 
@@ -70,7 +64,7 @@ function resolve<N extends ConnectorName>(name: N, create: (options: DiskConnect
   const existing = instances[name];
   if (existing) return existing;
   const { dataDir, mode, latency } = resolveConnectorSettings();
-  const created = create({ filePath: path.join(dataDir, DATA_FILES[name]), mode, latency });
+  const created = create({ dataDir, mode, latency });
   instances = { ...instances, [name]: created };
   return created;
 }

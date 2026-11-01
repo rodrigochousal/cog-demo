@@ -1,4 +1,4 @@
-import type { CurrencyCode, PaymentRail, RefundReason, RefundRecord, RefundStatus } from "@platform/shared-types";
+import type { CurrencyCode, PaymentProcessor, PaymentRail, Refund, RefundReason, RefundStatus } from "../../domain/index.js";
 
 type Row = [
   id: string,
@@ -35,10 +35,32 @@ const ROWS: Row[] = [
   ["rf_0e1f2a3b4cd2", ["cus_C2gW4tPk5j", "Lucas Martin", "lucas.martin@free.fr"], ["Velocity Car Rental", "7512"], [17_830, 17_830, "EUR"], "duplicate_charge", "pending_review", ["card", "7123"], 31, ["support.jlee", null], "Deposit hold captured instead of released at vehicle return.", ["2026-10-18T17:44:50.000Z", "2026-10-18T17:44:50.000Z"]],
 ];
 
-/** 18 refunds across every status, reason, rail and currency. */
-export function seedRefunds(): RefundRecord[] {
+/** USD charges are taken (and refunded) through Stripe; EUR and GBP through PayPal. */
+const processorFor = (currency: CurrencyCode): PaymentProcessor => (currency === "USD" ? "stripe" : "paypal");
+
+const processorReference = (processor: PaymentProcessor, id: string) =>
+  processor === "stripe" ? `re_${id.slice(3)}` : `${id.slice(3).toUpperCase()}PAYPL`;
+
+/** Statuses a refund only reaches after sign-off. */
+const SIGNED_OFF: readonly RefundStatus[] = ["approved", "processing", "completed", "failed"];
+/** Refunds of at least this many minor units also need the controller's approval. */
+const DUAL_APPROVAL_MINOR = 100_000;
+const CONTROLLER = "fin.controller";
+
+function approvalsFor(status: RefundStatus, reviewedBy: string | null, amountMinor: number): string[] {
+  if (reviewedBy === null || !SIGNED_OFF.includes(status)) return [];
+  return amountMinor >= DUAL_APPROVAL_MINOR ? [reviewedBy, CONTROLLER] : [reviewedBy];
+}
+
+/**
+ * 18 refunds across every status, reason, rail, currency and both processors, in the
+ * platform's generic shape. Each processor mock seeds its own file from these.
+ */
+export function seedRefunds(): Refund[] {
   return ROWS.map(([id, [customerId, customerName, customerEmail], [merchantName, merchantCategoryCode], [refund, original, currency], reason, status, [paymentRail, destinationLast4], riskScore, [requestedBy, reviewedBy], notes, [createdAt, updatedAt]]) => ({
     id,
+    processor: processorFor(currency),
+    processorReference: processorReference(processorFor(currency), id),
     transactionId: `txn_${id.slice(3)}`,
     customerId,
     customerName,
@@ -54,6 +76,7 @@ export function seedRefunds(): RefundRecord[] {
     riskScore,
     requestedBy,
     reviewedBy,
+    approvals: approvalsFor(status, reviewedBy, refund),
     notes,
     createdAt,
     updatedAt,

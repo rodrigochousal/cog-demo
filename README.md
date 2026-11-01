@@ -53,7 +53,7 @@ services/                 BFFs (one per app; each app's only backend)
   engineering/            Express BFF for apps/engineering                 :4002
 packages/
   backend-common/         Closed backend module shared by every service
-  shared-types/           Zod contracts + inferred types, DTOs and domain types (only dependency: zod)
+  shared-types/           Zod client-row contracts + inferred types and DTOs (only dependency: zod)
 scripts/
   check-boundaries.mjs    Enforces the import rules below (`pnpm lint:boundaries`)
   reset-data.mjs          Wipes local data (`pnpm data:reset`)
@@ -89,13 +89,13 @@ These rules are architectural. `pnpm lint:boundaries` enforces them, and `pnpm c
 3. **`packages/backend-common`: closed and shared.**
    - It may import npm packages and `@platform/shared-types`, and nothing else from the workspace.
    - It knows nothing about any service or app and must never import from `services/*` or `apps/*`.
-   - It holds surface-agnostic building blocks: the Express service bootstrap, the error envelope, logging, config, and local storage.
+   - It holds surface-agnostic building blocks: the Express service bootstrap, the error envelope, logging, config, local storage, the generic domain types (`src/domain`) and the connectors.
 4. **`packages/shared-types`: pure contracts.**
    - Its only dependency is `zod`, and it has no runtime code beyond Zod schemas and type-adjacent constants.
-   - `src/contracts/*` holds the Zod API contracts; their TypeScript types are inferred from them, never hand-written.
-   - `src/common.ts` holds cross-cutting types (`Money`, `ApiErrorBody`, `HealthResponse`).
-   - `src/domain/*` holds shared domain records.
+   - `src/contracts/*` holds the Zod client-row contracts; their TypeScript types are inferred from them, never hand-written.
+   - `src/common.ts` holds cross-cutting types (`ApiErrorBody`, `HealthResponse`, `ValidationIssue`).
    - `src/dto/<surface>.ts` holds the screen-shaped request/response types for each app↔BFF pair.
+   - It holds only what clients see. Backend domain types and vendor shapes never go here (see [Data types](#data-types-vendor-edge--domain--client-row)).
 5. **Relative imports never cross a workspace package.** Go through the package's public entry point (`@platform/...`).
 
 ### Where does new code go?
@@ -106,7 +106,8 @@ These rules are architectural. `pnpm lint:boundaries` enforces them, and `pnpm c
 | An endpoint, a business rule, or response shaping for that screen | `services/<team>/src/routes/` (+ `policy/`, `presenters/` as it grows) |
 | A request/response type for that endpoint                    | `packages/shared-types/src/dto/<team>.ts`  |
 | A store, an integration mock, or a rule needed by 2+ services | `packages/backend-common/src/<module>/`    |
-| A domain record used by several surfaces                     | `packages/shared-types/src/domain/`        |
+| A generic (vendor-agnostic) domain type                      | `packages/backend-common/src/domain/`      |
+| A new vendor behind an existing connector                    | `packages/backend-common/src/connectors/<x>/vendors/<vendor>.ts` |
 | A shadcn/ui primitive                                        | `pnpm dlx shadcn@latest add <component>` inside the app |
 
 ## Local storage (no database)
@@ -137,17 +138,20 @@ In production each BFF would talk to a PostgreSQL cluster or a SaaS vendor API. 
 dependencies are replaced by **connectors**: interfaces in `backend-common/src/connectors`, backed by
 async (`fs/promises`) JSON-file drivers, so everything works with zero credentials.
 
-| Connector interface    | Hub factory                | Used by                | Data file (`packages/backend-common/data/`) | Stands in for |
-| ---------------------- | -------------------------- | ---------------------- | ------------------------------------------- | ------------- |
-| `ILedgerDatabase`      | `getLedgerDatabase()`      | `services/finance`     | `ledger.json` (refunds)                     | Finance PostgreSQL cluster |
-| `IKycVendorClient`     | `getKycVendorClient()`     | `services/compliance`  | `kyc-vendor.json` (verification payloads)   | Persona / Alloy REST APIs |
-| `IFeatureFlagProvider` | `getFeatureFlagProvider()` | `services/engineering` | `feature-flags.json`                        | LaunchDarkly / Unleash |
+| Connector interface    | Hub factory                | Used by                | Domain type       | Vendor mocks (`packages/backend-common/data/`) |
+| ---------------------- | -------------------------- | ---------------------- | ----------------- | ---------------------------------------------- |
+| `ILedgerDatabase`      | `getLedgerDatabase()`      | `services/finance`     | `Refund`          | `stripe-refunds.json`, `paypal-refunds.json` |
+| `IKycVendorClient`     | `getKycVendorClient()`     | `services/compliance`  | `KycVerification` | `persona-inquiries.json`, `alloy-evaluations.json` |
+| `IFeatureFlagProvider` | `getFeatureFlagProvider()` | `services/engineering` | `FeatureFlag`     | `launchdarkly-flags.json`, `unleash-features.json` |
 
 - **Hub only.** Services resolve connectors through the hub factories and pass them to their routers as
   `ApiDependencies`. The `Disk*` drivers are not exported, and `pnpm lint:boundaries` rejects `fs` imports
   in `services/*/src`, so handlers never see file paths or the storage driver.
+- **One adapter per vendor.** Each connector reads and writes every vendor it fronts and merges the
+  results. Refunds are stored with the processor of their original charge (`processor`); KYC
+  verifications and flags stay with the vendor that holds them.
 - **Seeding.** If a data file is missing (first boot, or after `pnpm data:reset`), the driver creates the
-  directory and seeds it with realistic mock data (15+ records per file). Services call
+  directory and seeds it with realistic mock data in that vendor's shape (15+ records per connector). Services call
   `initializeConnectors([...])` at boot so seeding happens before the first request.
 - **Simulated latency.** Every read and write waits a pseudo-random 50–150 ms
   (`PLATFORM_SIMULATED_LATENCY_MS`, e.g. `80`, `20-60` or `off`) so frontends show their loading states.
@@ -159,24 +163,52 @@ async (`fs/promises`) JSON-file drivers, so everything works with zero credentia
 - **Tests.** Call `configureConnectors({ mode: "memory", latency: false })` (or `{ dataDir, latency: false }`)
   before resolving connectors, or pass fakes to a service's `createApp({ dependencies })`.
 
+## Data types: vendor edge → domain → client row
+
+Each piece of data has three types, and each layer only sees its own:
+
+```text
+ StripeRefund / PayPalRefund        Refund              RefundTransactionRow
+ PersonaInquiry / AlloyEvaluation → KycVerification  →  KycReviewRow
+ LaunchDarklyFlag / UnleashFeature  FeatureFlag         FeatureFlagRow
+ ───────────────────────────────    ───────────────     ─────────────────────
+ edge: one per vendor, private to   generic domain:     client-only row: Zod schema
+ backend-common/src/connectors/     backend-common/     in shared-types, built by the
+ <x>/vendors, validated on disk     src/domain          BFF's presenter, sent to the app
+```
+
+- **Edge → domain** (connector adapters). Each vendor module defines its Zod schema (and
+  `z.infer` type) and a lossless `toDomain` / `toEdge` pair. The vendor's units, enums, casing,
+  timestamps and metadata conventions stop here. `pnpm lint:boundaries` rejects imports of
+  `connectors/<x>/vendors/*` from anywhere else. Adding a vendor means adding one adapter;
+  services and apps don't change.
+- **Domain → row** (`services/<team>/src/presenters`). The BFF maps the generic type to the
+  row its screen needs and parses it with the row schema before responding, so a mapping bug
+  is a logged 500 instead of a malformed payload.
+- **Apps** import only the row types and DTOs from `shared-types`. They never see domain or
+  vendor types.
+
+| Endpoint                      | Role needed            | Response (`dto/<team>.ts`) |
+| ----------------------------- | ---------------------- | -------------------------- |
+| `GET /api/refunds` (finance)  | `finance` · `read`     | `RefundTransactionsResponse { rows: RefundTransactionRow[] }` |
+| `GET /api/kyc-reviews` (compliance) | `compliance` · `read` | `KycReviewQueueResponse { rows: KycReviewRow[] }` |
+| `GET /api/feature-flags` (engineering) | `engineering` · `read` | `FeatureFlagsResponse { rows: FeatureFlagRow[] }` |
+
 ## Strict runtime data contracts
 
-API contracts are Zod schemas in `packages/shared-types/src/contracts`. Each schema is the single
-source of truth for its type: services validate against the schema, and apps and services import the
-type that `z.infer` derives from it.
+The client-row contracts are Zod schemas in `packages/shared-types/src/contracts`. Each schema is the
+single source of truth for its type: services validate against the schema, and apps and services
+import the type that `z.infer` derives from it.
 
-| Schema                    | Inferred type        | Surface            | Notable rules |
-| ------------------------- | -------------------- | ------------------ | ------------- |
-| `kycRecordSchema`         | `KYCRecord`          | `apps/compliance`  | status `PENDING`/`APPROVED`/`REJECTED`, `documentUrl` absolute http(s) URL, `riskScore` 0–100, `notes` optional (defaults to `""`) |
-| `refundTransactionSchema` | `RefundTransaction`  | `apps/finance`     | `amount` > 0, status `PENDING_APPROVAL`/`PROCESSED`/`FAILED`, `currency` 3 letters (upper-cased), `createdTimestamp` ISO-8601, `approvalsReceived` distinct (defaults to `[]`) |
-| `featureFlagSchema`       | `FeatureFlagRecord`  | `apps/engineering` | `key` snake_case, `targetedTiers` distinct, `updatedAt` ISO-8601 |
+| Schema                       | Inferred type          | Surface            | Notable rules |
+| ---------------------------- | ---------------------- | ------------------ | ------------- |
+| `kycReviewRowSchema`         | `KycReviewRow`         | `apps/compliance`  | status `PENDING`/`APPROVED`/`REJECTED`, `documentUrl` absolute http(s) URL, `riskScore` 0–100, `notes` optional (defaults to `""`) |
+| `refundTransactionRowSchema` | `RefundTransactionRow` | `apps/finance`     | `amount` > 0 (major units), status `PENDING_APPROVAL`/`PROCESSED`/`FAILED`, `currency` 3 letters (upper-cased), `createdTimestamp` ISO-8601, `approvalsReceived` distinct (defaults to `[]`) |
+| `featureFlagRowSchema`       | `FeatureFlagRow`       | `apps/engineering` | `key` snake_case, `targetedTiers` distinct, `updatedAt` ISO-8601 |
 
 - Every text field is trimmed before it is checked, so a whitespace-only value counts as empty. Ids are
   URL-safe (`[A-Za-z0-9_-]`, UUIDs included). Unknown keys are stripped.
-- Each schema also exports a `…Input` type (`z.input`), the shape a client may send before defaults
-  apply, and its status enum (`KYC_RECORD_STATUSES`, `REFUND_TRANSACTION_STATUSES`).
-- These are the app-facing contracts. The connector records in `src/domain` (`KycVerificationPayload`,
-  `RefundRecord`, `FeatureFlag`) are the data-source shapes; services map from those to these.
+- Each schema also exports its status enum (`KYC_REVIEW_STATUSES`, `REFUND_TRANSACTION_STATUSES`).
 
 `validateBody(schema)` from `backend-common` enforces a contract at the Express boundary. On
 POST/PUT/PATCH it parses `req.body`, replaces it with the parsed output, and types `req.body` as the
@@ -184,7 +216,7 @@ schema's output in the handlers after it. Other methods pass through.
 
 ```ts
 router.post("/v1/refunds", auditAction("CREATE_REFUND"), requirePermission("finance", "execute"),
-  validateBody(refundTransactionSchema), async (req, res) => {
+  validateBody(refundTransactionRowSchema), async (req, res) => {
     req.body.currency; // string, already trimmed and upper-cased
   });
 ```

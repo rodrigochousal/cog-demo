@@ -1,4 +1,4 @@
-import { refundTransactionSchema, type RefundTransaction } from "@platform/shared-types";
+import { refundTransactionRowSchema, type RefundTransactionRow } from "@platform/shared-types";
 import { Router } from "express";
 import { describe, expectTypeOf, it } from "vitest";
 import { z } from "zod";
@@ -7,8 +7,8 @@ import { auditAction, requirePermission, validateBody } from "../src/index.js";
 describe("validateBody typing", () => {
   it("types req.body downstream as the schema output", () => {
     const router = Router();
-    router.post("/v1/refunds", validateBody(refundTransactionSchema), (req) => {
-      expectTypeOf(req.body).toEqualTypeOf<RefundTransaction>();
+    router.post("/v1/refunds", validateBody(refundTransactionRowSchema), (req) => {
+      expectTypeOf(req.body).toEqualTypeOf<RefundTransactionRow>();
     });
   });
 
@@ -18,9 +18,9 @@ describe("validateBody typing", () => {
       "/v1/refunds/:id",
       auditAction("UPDATE_REFUND"),
       requirePermission("finance", "execute"),
-      validateBody(refundTransactionSchema),
+      validateBody(refundTransactionRowSchema),
       (req) => {
-        expectTypeOf(req.body).toEqualTypeOf<RefundTransaction>();
+        expectTypeOf(req.body).toEqualTypeOf<RefundTransactionRow>();
       },
     );
   });

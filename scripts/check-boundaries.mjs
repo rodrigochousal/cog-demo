@@ -9,6 +9,8 @@
  *                               Never on another service or any app. Source may not touch the
  *                               file system: data goes through backend-common connectors.
  *  packages/backend-common   -> npm packages + @platform/shared-types only. Never services/* or apps/*.
+ *                               Vendor edge modules (src/connectors/<x>/vendors/*) may only be imported
+ *                               from their own connector directory, so vendor shapes never leak.
  *  packages/shared-types     -> no dependency but `zod` (its runtime contracts); imports nothing else outside itself.
  *  everywhere                -> relative imports may not escape their own workspace package.
  */
@@ -118,6 +120,7 @@ for (const svc of services) {
   checkWorkspace(svc, (spec, file) => {
     const name = packageName(spec);
     if (servicePkgs.has(name) || appPkgs.has(name)) return `services may not import ${name}; move shared code to @platform/backend-common`;
+    if (name.startsWith("@platform/") && spec !== name) return `import ${name} through its entry point, not '${spec}'`;
     const inSrc = file.startsWith(path.join(svc.dir, "src") + path.sep);
     if (inSrc && FS_MODULES.has(spec)) return `service source may not import '${spec}'; resolve data through the backend-common connector hub (getLedgerDatabase() etc.)`;
     return null;
@@ -147,6 +150,22 @@ for (const p of packages) {
     if (name.startsWith("@platform/") && name !== "@platform/shared-types") return `${p.pkg.name} may only import @platform/shared-types from the workspace, found ${name}`;
     return null;
   });
+}
+
+// ---- vendor edge types stay inside their connector -------------------------
+const backendCommon = packages.find((p) => p.pkg.name === "@platform/backend-common");
+if (backendCommon) {
+  const connectorsDir = path.join(backendCommon.dir, "src/connectors");
+  for (const file of walk(path.join(backendCommon.dir, "src"))) {
+    for (const spec of importsOf(file)) {
+      if (!isRelative(spec)) continue;
+      const [connector, folder] = path.relative(connectorsDir, path.resolve(path.dirname(file), spec)).split(path.sep);
+      if (connector === undefined || connector === ".." || folder !== "vendors") continue;
+      if (!file.startsWith(path.join(connectorsDir, connector) + path.sep)) {
+        fail(file, `vendor edge module '${spec}' may only be imported inside src/connectors/${connector}/; use the domain types instead`);
+      }
+    }
+  }
 }
 
 if (violations.length) {

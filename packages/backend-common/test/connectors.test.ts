@@ -1,7 +1,6 @@
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { CreateRefundInput, CustomerTier } from "@platform/shared-types";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DiskFeatureFlagProvider } from "../src/connectors/feature-flags/disk-feature-flag-provider.js";
 import { DiskKycVendorClient } from "../src/connectors/kyc/disk-kyc-vendor-client.js";
@@ -9,6 +8,9 @@ import { DiskLedgerDatabase } from "../src/connectors/ledger/disk-ledger-databas
 import {
   ConnectorError,
   configureConnectors,
+  type CreateRefundInput,
+  type CustomerTier,
+  type UpdateRefundInput,
   DomainError,
   getFeatureFlagProvider,
   getKycVendorClient,
@@ -29,10 +31,20 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-const file = (name: string) => path.join(dir, "nested", name);
-const ledger = () => new DiskLedgerDatabase({ filePath: file("ledger.json"), latency: false });
-const kyc = () => new DiskKycVendorClient({ filePath: file("kyc-vendor.json"), latency: false });
-const flags = () => new DiskFeatureFlagProvider({ filePath: file("feature-flags.json"), latency: false });
+const dataDir = () => path.join(dir, "nested");
+const file = (name: string) => path.join(dataDir(), name);
+const ledger = () => new DiskLedgerDatabase({ dataDir: dataDir(), latency: false });
+const kyc = () => new DiskKycVendorClient({ dataDir: dataDir(), latency: false });
+const flags = () => new DiskFeatureFlagProvider({ dataDir: dataDir(), latency: false });
+const VENDOR_FILES = [
+  "stripe-refunds.json",
+  "paypal-refunds.json",
+  "persona-inquiries.json",
+  "alloy-evaluations.json",
+  "launchdarkly-flags.json",
+  "unleash-features.json",
+];
+const recordsIn = (name: string) => (JSON.parse(readFileSync(file(name), "utf8")) as { schemaVersion: number; records: unknown[] }).records;
 
 async function expectDomainError(promise: Promise<unknown>, code: DomainError["code"], message: RegExp) {
   const err = await promise.then(
@@ -45,6 +57,7 @@ async function expectDomainError(promise: Promise<unknown>, code: DomainError["c
 }
 
 const newRefund = (overrides: Partial<CreateRefundInput> = {}): CreateRefundInput => ({
+  processor: "stripe",
   transactionId: "txn_test",
   customerId: "cus_test",
   customerName: "Test Customer",
@@ -60,34 +73,35 @@ const newRefund = (overrides: Partial<CreateRefundInput> = {}): CreateRefundInpu
   riskScore: 10,
   requestedBy: "ops.test",
   reviewedBy: null,
+  approvals: [],
   notes: "",
   ...overrides,
 });
 
 describe("seeding", () => {
   it.each([
-    ["ledger.json", () => ledger().findAll()],
-    ["kyc-vendor.json", () => kyc().listVerificationPayloads()],
-    ["feature-flags.json", () => flags().getFlags()],
-  ])("creates the directory and seeds %s with >= 15 valid records", async (name, readAll) => {
+    [["stripe-refunds.json", "paypal-refunds.json"], () => ledger().findAll()],
+    [["persona-inquiries.json", "alloy-evaluations.json"], () => kyc().listVerifications()],
+    [["launchdarkly-flags.json", "unleash-features.json"], () => flags().getFlags()],
+  ])("creates the directory and seeds one file per vendor (%j) with >= 15 records in total", async (names, readAll) => {
     const records = await readAll();
     expect(records.length).toBeGreaterThanOrEqual(15);
-    const onDisk = JSON.parse(readFileSync(file(name), "utf8")) as { schemaVersion: number; records: unknown[] };
-    expect(onDisk.schemaVersion).toBe(1);
-    expect(onDisk.records).toHaveLength(records.length);
+    const perVendor = names.map((name) => recordsIn(name).length);
+    for (const count of perVendor) expect(count).toBeGreaterThan(0);
+    expect(perVendor.reduce((a, b) => a + b, 0)).toBe(records.length);
   });
 
   it("does not reseed an existing file and reseeds after deletion", async () => {
     const db = ledger();
     await db.createRecord(newRefund());
     expect(await ledger().findAll()).toHaveLength(19);
-    rmSync(file("ledger.json"));
+    rmSync(file("stripe-refunds.json"));
     expect(await db.findAll()).toHaveLength(18);
   });
 
   it("uses unique ids in every seed", async () => {
     const ids = (await ledger().findAll()).map((r) => r.id);
-    const applicants = (await kyc().listVerificationPayloads()).map((p) => p.applicantId);
+    const applicants = (await kyc().listVerifications()).map((p) => p.applicantId);
     const keys = (await flags().getFlags()).map((f) => f.key);
     for (const list of [ids, applicants, keys]) expect(new Set(list).size).toBe(list.length);
   });
@@ -98,6 +112,8 @@ describe("DiskLedgerDatabase", () => {
     const created = await ledger().createRecord(newRefund());
     expect(created.id).toMatch(/^rf_[0-9a-f]{12}$/);
     expect(await ledger().findById(created.id)).toEqual(created);
+    expect(created).toMatchObject({ processor: "stripe", processorReference: expect.stringMatching(/^re_/) });
+    expect(recordsIn("stripe-refunds.json")).toContainEqual(expect.objectContaining({ metadata: expect.objectContaining({ platform_refund_id: created.id }) }));
 
     const updated = await ledger().updateRecord(created.id, { status: "approved", reviewedBy: "fin.test" });
     expect(updated).toMatchObject({ id: created.id, status: "approved", reviewedBy: "fin.test", createdAt: created.createdAt });
@@ -143,34 +159,56 @@ describe("DiskLedgerDatabase", () => {
     expect(updated).not.toHaveProperty("extra");
   });
 
+  it("routes new refunds to their processor and keeps the processor immutable", async () => {
+    const db = ledger();
+    const created = await db.createRecord(newRefund({ processor: "paypal", amount: { amountMinor: 1_250, currency: "EUR" }, originalAmount: { amountMinor: 2_000, currency: "EUR" } }));
+    expect(created.processorReference).toMatch(/^[A-Z0-9]{17}$/);
+    expect(recordsIn("paypal-refunds.json")).toContainEqual(expect.objectContaining({ invoice_id: created.id, amount: { currency_code: "EUR", value: "12.50" } }));
+    const moved = { processor: "stripe", approvals: ["fin.a", "fin.b"] } as UpdateRefundInput;
+    expect(await db.updateRecord(created.id, moved)).toMatchObject({ processor: "paypal", approvals: ["fin.a", "fin.b"] });
+    await expectDomainError(db.updateRecord(created.id, { approvals: ["fin.a", "fin.a"] }), "BUSINESS_RULE_VIOLATION", /distinct/);
+    await expectDomainError(db.createRecord(newRefund({ processor: "square" as "stripe" })), "BUSINESS_RULE_VIOLATION", /processor must be one of/);
+  });
+
   it("serialises concurrent writes without losing any", async () => {
     const db = ledger();
     await Promise.all(Array.from({ length: 10 }, (_, i) => db.createRecord(newRefund({ notes: `n${i}` }))));
-    expect(await new DiskLedgerDatabase({ filePath: file("ledger.json"), latency: false }).findAll()).toHaveLength(28);
+    expect(await new DiskLedgerDatabase({ dataDir: dataDir(), latency: false }).findAll()).toHaveLength(28);
   });
 
   it("raises a ConnectorError for a corrupt data file", async () => {
     await ledger().findAll();
-    writeFileSync(file("ledger.json"), "{ not json");
+    writeFileSync(file("stripe-refunds.json"), "{ not json");
     await expect(ledger().findAll()).rejects.toBeInstanceOf(ConnectorError);
-    writeFileSync(file("ledger.json"), JSON.stringify({ schemaVersion: 1, records: [{ id: "rf_1" }] }));
+    writeFileSync(file("stripe-refunds.json"), JSON.stringify({ schemaVersion: 1, records: [{ id: "re_1" }] }));
     await expect(ledger().findAll()).rejects.toThrow(/record 0 .* is invalid/);
+  });
+
+  it("raises a ConnectorError when a valid vendor record cannot be mapped to the domain", async () => {
+    await ledger().findAll();
+    const [pending] = recordsIn("stripe-refunds.json").filter((r) => (r as { status: string }).status === "pending") as {
+      metadata: Record<string, string>;
+    }[];
+    if (!pending) throw new Error("no pending Stripe refund in seed");
+    delete pending.metadata.review_status;
+    writeFileSync(file("stripe-refunds.json"), JSON.stringify({ schemaVersion: 1, records: [pending] }));
+    await expect(ledger().findAll()).rejects.toThrow(/could not map a stripe record/);
   });
 });
 
 describe("DiskKycVendorClient", () => {
   it("lists the queue oldest-first and fetches payloads", async () => {
-    const queue = await kyc().listVerificationPayloads();
+    const queue = await kyc().listVerifications();
     const times = queue.map((p) => p.submittedAt);
     expect(times).toEqual([...times].sort());
     const first = queue[0];
     if (!first) throw new Error("seed is empty");
-    expect(await kyc().getVerificationPayload(first.applicantId)).toEqual(first);
-    await expectDomainError(kyc().getVerificationPayload("app_missing"), "NOT_FOUND", /KYC applicant 'app_missing'/);
+    expect(await kyc().getVerification(first.applicantId)).toEqual(first);
+    await expectDomainError(kyc().getVerification("app_missing"), "NOT_FOUND", /KYC applicant 'app_missing'/);
   });
 
   it("records decisions, updates status and rejects decisions on finalised applicants", async () => {
-    const pending = (await kyc().listVerificationPayloads()).find((p) => p.status === "pending_review");
+    const pending = (await kyc().listVerifications()).find((p) => p.status === "pending_review");
     if (!pending) throw new Error("no pending applicant in seed");
     const escalated = await kyc().submitManualDecision(pending.applicantId, {
       outcome: "escalate",
@@ -193,7 +231,7 @@ describe("DiskKycVendorClient", () => {
   });
 
   it("validates decisions", async () => {
-    const [first] = await kyc().listVerificationPayloads();
+    const [first] = await kyc().listVerifications();
     if (!first) throw new Error("seed is empty");
     await expectDomainError(
       kyc().submitManualDecision(first.applicantId, { outcome: "approve", reviewerId: "cmp.test", reason: "   " }),
@@ -207,18 +245,19 @@ describe("DiskFeatureFlagProvider", () => {
   it("toggles flags and normalises targeting tiers", async () => {
     const [flag] = await flags().getFlags();
     if (!flag) throw new Error("seed is empty");
-    expect((await flags().toggleFlag(flag.key, !flag.enabled)).enabled).toBe(!flag.enabled);
-    const targeted = await flags().updateTargeting(flag.key, ["enterprise", "free", "enterprise"]);
-    expect(targeted.targetTiers).toEqual(["free", "enterprise"]);
+    expect(await flags().toggleFlag(flag.key, !flag.enabled, "eng.test")).toMatchObject({ enabled: !flag.enabled, updatedBy: "eng.test" });
+    const targeted = await flags().updateTargeting(flag.key, ["enterprise", "free", "enterprise"], " eng.other ");
+    expect(targeted).toMatchObject({ targetTiers: ["free", "enterprise"], updatedBy: "eng.other", provider: flag.provider });
     expect((await flags().getFlags()).find((f) => f.key === flag.key)?.targetTiers).toEqual(["free", "enterprise"]);
   });
 
   it("rejects unknown keys and tiers", async () => {
-    await expectDomainError(flags().toggleFlag("nope", true), "NOT_FOUND", /Feature flag 'nope'/);
+    await expectDomainError(flags().toggleFlag("nope", true, "eng.test"), "NOT_FOUND", /Feature flag 'nope'/);
     const [flag] = await flags().getFlags();
     if (!flag) throw new Error("seed is empty");
     const bogus = ["platinum"] as unknown as CustomerTier[];
-    await expectDomainError(flags().updateTargeting(flag.key, bogus), "BUSINESS_RULE_VIOLATION", /Unknown customer tier/);
+    await expectDomainError(flags().updateTargeting(flag.key, bogus, "eng.test"), "BUSINESS_RULE_VIOLATION", /Unknown customer tier/);
+    await expectDomainError(flags().toggleFlag(flag.key, true, "  "), "BUSINESS_RULE_VIOLATION", /actor is required/);
   });
 });
 
@@ -244,10 +283,10 @@ describe("connector hub", () => {
     configureConnectors({ dataDir: dir, latency: false });
     expect(getLedgerDatabase()).toBe(getLedgerDatabase());
     await initializeConnectors(["ledger", "kyc", "featureFlags"]);
-    for (const name of ["ledger.json", "kyc-vendor.json", "feature-flags.json"]) {
+    for (const name of VENDOR_FILES) {
       expect(readFileSync(path.join(dir, name), "utf8")).toContain('"schemaVersion": 1');
     }
-    expect(await getKycVendorClient().listVerificationPayloads()).toHaveLength(16);
+    expect(await getKycVendorClient().listVerifications()).toHaveLength(16);
     expect(await getFeatureFlagProvider().getFlags()).toHaveLength(18);
   });
 
@@ -280,8 +319,8 @@ describe("connector hub", () => {
     const created = await getLedgerDatabase().createRecord(newRefund());
     expect(await getLedgerDatabase().findById(created.id)).toEqual(created);
     expect(await getLedgerDatabase().findAll()).toHaveLength(19);
-    await getFeatureFlagProvider().toggleFlag((await getFeatureFlagProvider().getFlags())[0]!.key, false);
-    expect(await getKycVendorClient().listVerificationPayloads()).toHaveLength(16);
+    await getFeatureFlagProvider().toggleFlag((await getFeatureFlagProvider().getFlags())[0]!.key, false, "eng.test");
+    expect(await getKycVendorClient().listVerifications()).toHaveLength(16);
     expect(readdirSync(dir)).toEqual([]);
   });
 });

@@ -1,9 +1,9 @@
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import {
-  refundTransactionSchema,
+  refundTransactionRowSchema,
   type ApiErrorBody,
-  type RefundTransaction,
+  type RefundTransactionRow,
   type ValidationErrorDetails,
 } from "@platform/shared-types";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -25,7 +25,7 @@ const validRefund = {
   createdTimestamp: "2026-11-01T12:00:00.000Z",
 };
 
-const reached = vi.fn<(body: RefundTransaction) => void>();
+const reached = vi.fn<(body: RefundTransactionRow) => void>();
 const audits: AuditLogPayload[] = [];
 let server: Server;
 let base: string;
@@ -36,7 +36,7 @@ beforeAll(async () => {
     allowedOrigins: [],
     audit: { sink: (payload) => void audits.push(payload) },
     routes: (app) => {
-      const handler = validateBody(refundTransactionSchema);
+      const handler = validateBody(refundTransactionRowSchema);
       app.post("/api/refunds", auditAction("CREATE_REFUND"), requirePermission("finance", "execute"), handler, (req, res) => {
         reached(req.body);
         res.status(201).json(req.body);
@@ -75,7 +75,7 @@ describe("validateBody", () => {
   it("replaces req.body with the parsed output (trimmed, normalised, defaults, unknown keys stripped)", async () => {
     reached.mockClear();
     const res = await send("POST", "/api/refunds", JSON.stringify({ ...validRefund, customerId: "  cus_42 ", role: "admin" }));
-    const expected: RefundTransaction = { ...validRefund, currency: "USD", approvalsReceived: [] } as RefundTransaction;
+    const expected: RefundTransactionRow = { ...validRefund, currency: "USD", approvalsReceived: [] } as RefundTransactionRow;
     expect(res.status).toBe(201);
     expect(await res.json()).toEqual(expected);
     expect(reached).toHaveBeenCalledWith(expected);

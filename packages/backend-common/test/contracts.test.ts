@@ -1,15 +1,12 @@
 import {
-  featureFlagSchema,
-  kycRecordSchema,
-  refundTransactionSchema,
-  type FeatureFlagRecordInput,
-  type KYCRecordInput,
-  type RefundTransactionInput,
+  featureFlagRowSchema,
+  kycReviewRowSchema,
+  refundTransactionRowSchema,
 } from "@platform/shared-types";
 import { describe, expect, it } from "vitest";
 import type { z } from "zod";
 
-const validKyc: KYCRecordInput = {
+const validKyc: z.input<typeof kycReviewRowSchema> = {
   id: "3f8a8c9e-6b1d-4d55-9f43-2b9c1e0e7a11",
   status: "PENDING",
   applicantName: "Ada Lovelace",
@@ -19,7 +16,7 @@ const validKyc: KYCRecordInput = {
   notes: "Looks fine",
 };
 
-const validRefund: RefundTransactionInput = {
+const validRefund: z.input<typeof refundTransactionRowSchema> = {
   id: "rf_0001",
   amount: 125.5,
   status: "PENDING_APPROVAL",
@@ -29,7 +26,7 @@ const validRefund: RefundTransactionInput = {
   approvalsReceived: ["manager_1"],
 };
 
-const validFlag: FeatureFlagRecordInput = {
+const validFlag: z.input<typeof featureFlagRowSchema> = {
   id: "ff_1",
   key: "instant_payouts",
   description: "Pays out instantly",
@@ -45,16 +42,16 @@ const issuesOf = (schema: z.ZodType, input: unknown) => {
   return result.error.issues.map((i) => ({ path: i.path, code: i.code }));
 };
 
-describe("kycRecordSchema", () => {
+describe("kycReviewRowSchema", () => {
   it("accepts a valid record and trims text", () => {
-    expect(kycRecordSchema.parse({ ...validKyc, applicantName: "  Ada Lovelace  ", assignedTo: " analyst_7\n" })).toEqual(
+    expect(kycReviewRowSchema.parse({ ...validKyc, applicantName: "  Ada Lovelace  ", assignedTo: " analyst_7\n" })).toEqual(
       validKyc,
     );
   });
 
   it("defaults missing notes to an empty string and strips unknown keys", () => {
     const { notes: _notes, ...withoutNotes } = validKyc;
-    expect(kycRecordSchema.parse({ ...withoutNotes, isAdmin: true })).toEqual({ ...withoutNotes, notes: "" });
+    expect(kycReviewRowSchema.parse({ ...withoutNotes, isAdmin: true })).toEqual({ ...withoutNotes, notes: "" });
   });
 
   it.each([
@@ -71,11 +68,11 @@ describe("kycRecordSchema", () => {
     ["id", "../etc/passwd"],
     ["id", "  "],
   ])("rejects %s = %j", (field, value) => {
-    expect(issuesOf(kycRecordSchema, { ...validKyc, [field]: value }).map((i) => i.path)).toEqual([[field]]);
+    expect(issuesOf(kycReviewRowSchema, { ...validKyc, [field]: value }).map((i) => i.path)).toEqual([[field]]);
   });
 
   it("reports every missing required field", () => {
-    expect(issuesOf(kycRecordSchema, {}).map((i) => i.path.join("."))).toEqual([
+    expect(issuesOf(kycReviewRowSchema, {}).map((i) => i.path.join("."))).toEqual([
       "id",
       "status",
       "applicantName",
@@ -86,14 +83,14 @@ describe("kycRecordSchema", () => {
   });
 });
 
-describe("refundTransactionSchema", () => {
+describe("refundTransactionRowSchema", () => {
   it("accepts a valid refund and normalises the currency", () => {
-    expect(refundTransactionSchema.parse({ ...validRefund, currency: " usd " })).toEqual(validRefund);
+    expect(refundTransactionRowSchema.parse({ ...validRefund, currency: " usd " })).toEqual(validRefund);
   });
 
   it("defaults approvalsReceived to []", () => {
     const { approvalsReceived: _a, ...rest } = validRefund;
-    expect(refundTransactionSchema.parse(rest).approvalsReceived).toEqual([]);
+    expect(refundTransactionRowSchema.parse(rest).approvalsReceived).toEqual([]);
   });
 
   it.each([
@@ -108,28 +105,28 @@ describe("refundTransactionSchema", () => {
     ["createdTimestamp", "yesterday"],
     ["createdTimestamp", "2026-02-30T00:00:00Z"],
   ])("rejects %s = %j", (field, value) => {
-    expect(issuesOf(refundTransactionSchema, { ...validRefund, [field]: value }).map((i) => i.path)).toEqual([[field]]);
+    expect(issuesOf(refundTransactionRowSchema, { ...validRefund, [field]: value }).map((i) => i.path)).toEqual([[field]]);
   });
 
   it("flags blank and duplicate approvers at their index", () => {
-    expect(issuesOf(refundTransactionSchema, { ...validRefund, approvalsReceived: ["a", " ", "a"] })).toEqual([
+    expect(issuesOf(refundTransactionRowSchema, { ...validRefund, approvalsReceived: ["a", " ", "a"] })).toEqual([
       { path: ["approvalsReceived", 1], code: "too_small" },
     ]);
-    expect(issuesOf(refundTransactionSchema, { ...validRefund, approvalsReceived: ["a", "b", " a "] })).toEqual([
+    expect(issuesOf(refundTransactionRowSchema, { ...validRefund, approvalsReceived: ["a", "b", " a "] })).toEqual([
       { path: ["approvalsReceived", 2], code: "custom" },
     ]);
   });
 });
 
-describe("featureFlagSchema", () => {
+describe("featureFlagRowSchema", () => {
   it("accepts a valid flag", () => {
-    expect(featureFlagSchema.parse(validFlag)).toEqual(validFlag);
+    expect(featureFlagRowSchema.parse(validFlag)).toEqual(validFlag);
   });
 
   it.each(["InstantPayouts", "instant-payouts", "instant__payouts", "_instant", "instant_", "1st_flag", ""])(
     "rejects key %j",
     (key) => {
-      expect(issuesOf(featureFlagSchema, { ...validFlag, key }).map((i) => i.path)).toEqual([["key"]]);
+      expect(issuesOf(featureFlagRowSchema, { ...validFlag, key }).map((i) => i.path)).toEqual([["key"]]);
     },
   );
 
@@ -140,6 +137,6 @@ describe("featureFlagSchema", () => {
     ["updatedAt", "not-a-date"],
     ["description", " "],
   ])("rejects %s = %j", (field, value) => {
-    expect(issuesOf(featureFlagSchema, { ...validFlag, [field]: value }).map((i) => i.path[0])).toEqual([field]);
+    expect(issuesOf(featureFlagRowSchema, { ...validFlag, [field]: value }).map((i) => i.path[0])).toEqual([field]);
   });
 });

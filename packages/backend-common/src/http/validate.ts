@@ -53,7 +53,7 @@ export function bodyValidationError(error: z.ZodError): HttpError {
  * downstream handlers never run.
  * The parsed type flows into the next handlers on the same route:
  *
- *   router.post("/v1/refunds", validateBody(refundTransactionSchema), (req, res) => {
+ *   router.post("/v1/refunds", validateBody(refundTransactionRowSchema), (req, res) => {
  *     req.body.currency; // string, already upper-cased
  *   });
  */

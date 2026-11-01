@@ -1,14 +1,17 @@
 import { z } from "zod";
 import { httpUrlSchema, optionalText, recordIdSchema, requiredText } from "./primitives.js";
 
-/** API contract for a row in the compliance KYC review queue (apps/compliance ↔ services/compliance). */
+/**
+ * Client-only row of the compliance KYC review queue, as services/compliance returns it to
+ * apps/compliance. The BFF maps the backend `KycVerification` (whatever vendor ran it) to this.
+ */
 
-export const KYC_RECORD_STATUSES = ["PENDING", "APPROVED", "REJECTED"] as const;
-export const kycRecordStatusSchema = z.enum(KYC_RECORD_STATUSES);
+export const KYC_REVIEW_STATUSES = ["PENDING", "APPROVED", "REJECTED"] as const;
+export const kycReviewStatusSchema = z.enum(KYC_REVIEW_STATUSES);
 
-export const kycRecordSchema = z.object({
+export const kycReviewRowSchema = z.object({
   id: recordIdSchema,
-  status: kycRecordStatusSchema,
+  status: kycReviewStatusSchema,
   applicantName: requiredText(200),
   /** Link to the applicant's identity document in the vendor portal. */
   documentUrl: httpUrlSchema,
@@ -20,8 +23,6 @@ export const kycRecordSchema = z.object({
   notes: optionalText(5000),
 });
 
-export type KYCRecordStatus = z.infer<typeof kycRecordStatusSchema>;
-/** A validated KYC record (schema output: trimmed, defaults applied). */
-export type KYCRecord = z.infer<typeof kycRecordSchema>;
-/** What a client may send before parsing (e.g. `notes` may be omitted). */
-export type KYCRecordInput = z.input<typeof kycRecordSchema>;
+export type KycReviewStatus = z.infer<typeof kycReviewStatusSchema>;
+/** A validated KYC review row (schema output: trimmed, defaults applied). */
+export type KycReviewRow = z.infer<typeof kycReviewRowSchema>;

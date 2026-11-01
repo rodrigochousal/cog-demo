@@ -1,5 +1,7 @@
-import { createAccessCheckRouter, type IKycVendorClient } from "@platform/backend-common";
+import { createAccessCheckRouter, requirePermission, type IKycVendorClient } from "@platform/backend-common";
+import type { KycReviewQueueResponse } from "@platform/shared-types";
 import { Router } from "express";
+import { toKycReviewRow } from "../presenters/kyc-review-row.js";
 
 /** Connectors this surface may use, resolved by the backend-common hub. */
 export interface ApiDependencies {
@@ -17,5 +19,9 @@ export interface ApiDependencies {
 export function createApiRouter(deps: ApiDependencies): Router {
   const router = Router();
   router.use("/access", createAccessCheckRouter("compliance"));
+  router.get("/kyc-reviews", requirePermission("compliance", "read"), async (_req, res) => {
+    const body: KycReviewQueueResponse = { rows: (await deps.kyc.listVerifications()).map(toKycReviewRow) };
+    res.json(body);
+  });
   return router;
 }
