@@ -2,9 +2,14 @@
 /**
  * Enforces the BFF architecture's import boundaries. Run with `pnpm lint:boundaries`.
  *
- *  apps/<x>                  -> may depend on @platform/shared-types only; talks to its BFF via
- *                               src/lib/api-client.ts (the only file allowed to call fetch).
- *                               No backend packages, Node built-ins or database/infra clients.
+ *  apps/<x>                  -> may depend on @platform/shared-types and ui-shared only (both required);
+ *                               talks to its BFF through ui-shared's apiClient, so app source never
+ *                               calls fetch. No backend packages, Node built-ins or database/infra clients.
+ *                               src/ holds only app/, pages/, common/ and features/. Server state is
+ *                               TanStack Query: no useEffect in app source, and useQuery/useMutation
+ *                               are only called from src/features/<feature>/api/.
+ *  packages/ui-shared        -> npm packages + @platform/shared-types; src/api/api-client.ts is the
+ *                               only file in any frontend that may call fetch.
  *  services/<x>              -> may depend on @platform/backend-common and @platform/shared-types.
  *                               Never on another service or any app. Source may not touch the
  *                               file system: data goes through backend-common connectors.
@@ -89,26 +94,52 @@ function checkWorkspace(ws, rule) {
 }
 
 // ---- apps/* -----------------------------------------------------------------
+const APP_SRC_LAYERS = new Set(["app", "pages", "common", "features"]);
+const FETCH_RE = /(?:^|[^\w.])fetch\s*\(/m;
+const EFFECT_RE = /\buse(?:Layout|Insertion)?Effect\b/;
+const QUERY_HOOK_RE = /\b(?:useQuery|useMutation|useSuspenseQuery|useInfiniteQuery|useQueries)\s*\(/;
 for (const app of apps) {
   const pkgFile = path.join(app.dir, "package.json");
-  for (const dep of Object.keys(allDeps(app.pkg))) {
+  const deps = allDeps(app.pkg);
+  for (const dep of Object.keys(deps)) {
     if (dep.startsWith("@platform/") && dep !== "@platform/shared-types") fail(pkgFile, `apps may only depend on @platform/shared-types, found ${dep}`);
     if (DB_AND_INFRA_CLIENTS.some((c) => dep === c || dep.startsWith(`${c}/`))) fail(pkgFile, `apps must not depend on database/infra client '${dep}'`);
+    if (dep === "@tanstack/react-table") fail(pkgFile, "apps render tables through ui-shared's <CoreDataTable />, not @tanstack/react-table directly");
   }
-  const apiClient = path.join(app.dir, "src/lib/api-client.ts");
+  if (app.pkg.dependencies?.["ui-shared"] !== "workspace:*") fail(pkgFile, `apps must depend on "ui-shared": "workspace:*"`);
   checkWorkspace(app, (spec, file) => {
     const name = packageName(spec);
     const isConfig = !file.startsWith(path.join(app.dir, "src") + path.sep);
     if (name.startsWith("@platform/") && name !== "@platform/shared-types") return `apps may not import ${name}; call the paired BFF over HTTP instead`;
     if (DB_AND_INFRA_CLIENTS.includes(name)) return `apps may not import database/infra client '${name}'`;
     if (NODE_BUILTINS.has(name) && !isConfig) return `app source may not import Node built-in '${spec}' (no server-side data access in apps)`;
+    if (name === "ui-shared" && spec !== name) return `import ui-shared through its entry point, not '${spec}'`;
     return null;
   });
-  for (const file of walk(path.join(app.dir, "src"))) {
-    if (file !== apiClient && /(?:^|[^\w.])fetch\s*\(/m.test(readFileSync(file, "utf8"))) {
-      fail(file, "only src/lib/api-client.ts may call fetch (all traffic goes to the paired BFF)");
+  const srcDir = path.join(app.dir, "src");
+  for (const entry of readdirSync(srcDir)) {
+    if (!APP_SRC_LAYERS.has(entry)) fail(path.join(srcDir, entry), "app src/ may only contain app/, pages/, common/ and features/");
+  }
+  for (const file of walk(srcDir)) {
+    const src = readFileSync(file, "utf8");
+    if (FETCH_RE.test(src)) fail(file, "app source may not call fetch; use apiClient.getParsed / postParsed from ui-shared");
+    if (EFFECT_RE.test(src)) fail(file, "app source may not use effects; server state belongs to TanStack Query hooks in src/features/<feature>/api/");
+    const [layer, , sub] = path.relative(srcDir, file).split(path.sep);
+    if (QUERY_HOOK_RE.test(src) && !(layer === "features" && sub === "api")) {
+      fail(file, "useQuery/useMutation may only be called from src/features/<feature>/api/");
     }
   }
+}
+
+// ---- packages/ui-shared: the single network edge of every frontend ---------------
+const uiShared = packages.find((p) => p.pkg.name === "ui-shared");
+if (uiShared) {
+  const clientFile = path.join(uiShared.dir, "src/api/api-client.ts");
+  for (const file of walk(path.join(uiShared.dir, "src"))) {
+    if (file !== clientFile && FETCH_RE.test(readFileSync(file, "utf8"))) fail(file, "only ui-shared/src/api/api-client.ts may call fetch");
+  }
+} else {
+  fail(path.join(root, "packages"), "packages/ui-shared is missing");
 }
 
 // ---- services/* -------------------------------------------------------------

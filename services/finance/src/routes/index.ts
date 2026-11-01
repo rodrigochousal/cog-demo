@@ -1,7 +1,6 @@
-import { createAccessCheckRouter, requirePermission, type ILedgerDatabase } from "@platform/backend-common";
-import type { RefundTransactionsResponse } from "@platform/shared-types";
+import { createAccessCheckRouter, type ILedgerDatabase } from "@platform/backend-common";
 import { Router } from "express";
-import { toRefundTransactionRow } from "../presenters/refund-transaction-row.js";
+import { createRefundsRouter } from "./refunds.js";
 
 /** Connectors this surface may use, resolved by the backend-common hub. */
 export interface ApiDependencies {
@@ -19,9 +18,6 @@ export interface ApiDependencies {
 export function createApiRouter(deps: ApiDependencies): Router {
   const router = Router();
   router.use("/access", createAccessCheckRouter("finance"));
-  router.get("/refunds", requirePermission("finance", "read"), async (_req, res) => {
-    const body: RefundTransactionsResponse = { rows: (await deps.ledger.findAll()).map(toRefundTransactionRow) };
-    res.json(body);
-  });
+  router.use("/refunds", createRefundsRouter(deps.ledger));
   return router;
 }
