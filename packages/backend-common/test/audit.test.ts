@@ -6,7 +6,6 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import {
   auditAction,
   auditLogger,
-  createMemoryStore,
   createServiceApp,
   createStdoutAuditSink,
   formatAuditLine,
@@ -60,10 +59,19 @@ describe("auditLogger via createServiceApp", () => {
   let base: string;
 
   beforeAll(async () => {
-    const widgets = createMemoryStore<Record<string, Widget>>("widgets", () => ({
+    let state: Record<string, Widget> = {
       w1: { id: "w1", name: "Alpha", enabled: false, owner: { team: "ops" }, secret: "s3cr3t" },
       w2: { id: "w2", name: "Beta", enabled: true, owner: { team: "ops" } },
-    }));
+    };
+    /** Minimal all-or-nothing in-memory store: handlers mutate a draft that replaces state on return. */
+    const widgets = {
+      transact<R>(fn: (draft: Record<string, Widget>) => R): R {
+        const draft = structuredClone(state);
+        const result = fn(draft);
+        state = draft;
+        return result;
+      },
+    };
     const app = createServiceApp({
       name: "widget-service",
       allowedOrigins: [],

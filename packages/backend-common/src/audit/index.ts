@@ -5,15 +5,13 @@
  * writes one JSON line to stdout. Handlers only add the business context:
  *
  * @example
- * router.put("/v1/flags/:id", auditAction("TOGGLE_FLAG"), requirePermission("engineering", "toggle"), (req, res) => {
+ * router.put("/v1/flags/:key", auditAction("TOGGLE_FLAG"), requirePermission("engineering", "toggle"), async (req, res) => {
  *   const audit = useAudit(req);
- *   const updated = flags.transact((draft) => {
- *     const flag = draft[req.params.id];
- *     audit.before(flag);
- *     flag.enabled = !flag.enabled;
- *     audit.after(flag);
- *     return flag;
- *   });
+ *   const key = String(req.params.key);
+ *   const flag = (await deps.featureFlags.getFlags()).find((f) => f.key === key);
+ *   audit.before(flag ?? null);
+ *   const updated = await deps.featureFlags.toggleFlag(key, !flag?.enabled);
+ *   audit.after(updated);
  *   res.json(updated);
  * });
  */

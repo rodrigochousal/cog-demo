@@ -177,13 +177,9 @@ export function auditAction(action: string): RequestHandler {
  *
  * @example
  * const audit = useAudit(req);
- * const result = store.transact((draft) => {
- *   const refund = draft.refunds[id];
- *   audit.before(refund);
- *   refund.status = "EXECUTED";
- *   audit.after(refund);
- *   return refund;
- * });
+ * audit.before(await deps.ledger.findById(id));
+ * const refund = await deps.ledger.updateRecord(id, { status: "approved" });
+ * audit.after(refund);
  */
 export function useAudit(req: Request): AuditTrail {
   const trail = req.audit;

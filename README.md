@@ -204,20 +204,17 @@ Every POST, PUT, PATCH and DELETE handled by any BFF writes one audit line to st
 - **Delta.** `computeDelta(old, new)` is pure. A create gives `{ oldValue: null, newValue: <record> }`. A delete gives `{ oldValue: <record>, newValue: null }`. An update keeps only the changed keys on both sides and keeps the nested structure. Keys such as `password`, `token` and `cardNumber` (see `DEFAULT_REDACT_KEYS`) are written as `"[REDACTED]"`.
 - **Non-blocking.** The line is written with `setImmediate` after the response is sent. If auditing throws, the error is logged and the request is unaffected.
 
-Handlers add business context. `auditAction` names the action and should come first so that RBAC and validation failures are still labelled. `useAudit(req)` returns the trail for recording snapshots. It throws if the audit middleware isn't mounted, so a mutation can't silently skip its audit line. Snapshots are synchronous copies, so you can take them inside `transact()`:
+Handlers add business context. `auditAction` names the action and should come first so that RBAC and validation failures are still labelled. `useAudit(req)` returns the trail for recording snapshots. It throws if the audit middleware isn't mounted, so a mutation can't silently skip its audit line. Snapshots are synchronous copies, so take them right after reading and right after writing through the connector:
 
 ```ts
 import { auditAction, requirePermission, useAudit } from "@platform/backend-common";
 
-router.post("/v1/refunds/:id/execute", auditAction("EXECUTE_REFUND"), requirePermission("finance", "execute"), (req, res) => {
+router.post("/v1/refunds/:id/execute", auditAction("EXECUTE_REFUND"), requirePermission("finance", "execute"), async (req, res) => {
   const audit = useAudit(req);
-  const refund = refunds.transact((draft) => {
-    const refund = draft[req.params.id];
-    audit.before(refund);
-    refund.status = "EXECUTED";
-    audit.after(refund);
-    return refund;
-  });
+  const id = String(req.params.id);
+  audit.before(await deps.ledger.findById(id));
+  const refund = await deps.ledger.updateRecord(id, { status: "approved" });
+  audit.after(refund);
   res.json(refund);
 });
 ```
