@@ -69,6 +69,8 @@ export function DataTable<TData>({
     onColumnFiltersChange: setColumnFilters,
     onGlobalFilterChange: setGlobalFilter,
     globalFilterFn: "includesString",
+    // Select filters pick a category, so match exactly rather than by substring.
+    defaultColumn: { filterFn: "equals" },
     getCoreRowModel: getCoreRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
     getSortedRowModel: getSortedRowModel(),

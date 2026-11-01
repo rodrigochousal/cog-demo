@@ -57,14 +57,17 @@ export function createServiceApp(options: ServiceAppOptions): Express {
 export interface StartOptions {
   name: string;
   port: number;
+  /** Interface to bind. Defaults to HOST env or 127.0.0.1 so BFFs are not exposed off-machine. */
+  host?: string;
   logger?: Logger;
 }
 
 /** Starts listening and wires graceful shutdown on SIGINT/SIGTERM. */
 export function startService(app: Express, options: StartOptions): Server {
   const logger = options.logger ?? createLogger(options.name);
-  const server = app.listen(options.port, () => {
-    logger.info(`listening on http://localhost:${options.port}`);
+  const host = options.host ?? process.env.HOST ?? "127.0.0.1";
+  const server = app.listen(options.port, host, () => {
+    logger.info(`listening on http://${host}:${options.port}`);
   });
   const shutdown = (signal: string) => {
     logger.info(`${signal} received, shutting down`);
