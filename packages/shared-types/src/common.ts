@@ -22,6 +22,7 @@ export interface ApiErrorBody {
 export type ApiErrorCode =
   | "BAD_REQUEST"
   | "VALIDATION_FAILED"
+  | "FORBIDDEN"
   | "NOT_FOUND"
   | "CONFLICT"
   | "BUSINESS_RULE_VIOLATION"

@@ -1,7 +1,7 @@
 import type { AccessCheckResponse } from "@platform/shared-types";
 import { Router } from "express";
 import { RESOURCE_ACTIONS, type Action, type Resource, type ResourceAction } from "./permissions.js";
-import { PERMISSION_DENIED_BODY, requirePermission } from "./require-permission.js";
+import { permissionDenied, requirePermission } from "./require-permission.js";
 import "./request.js";
 
 /**
@@ -18,9 +18,9 @@ export function createAccessCheckRouter(resource: Resource): Router {
   const actions: readonly Action[] = RESOURCE_ACTIONS[resource];
   for (const action of actions) {
     const method = action === "read" ? "get" : "post";
-    router[method](`/${action}`, requirePermission(...([resource, action] as ResourceAction)), (req, res) => {
+    router[method](`/${action}`, requirePermission(...([resource, action] as ResourceAction)), (req, res, next) => {
       if (!req.user) {
-        res.status(403).json(PERMISSION_DENIED_BODY);
+        next(permissionDenied());
         return;
       }
       const body: AccessCheckResponse = { resource, action, allowed: true, user: req.user };

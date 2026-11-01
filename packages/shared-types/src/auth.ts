@@ -18,25 +18,12 @@ export interface AuthenticatedUser {
   role: UserRole;
 }
 
-/** Body of the HTTP 403 a BFF returns when the caller's role lacks a permission. */
-export interface PermissionDeniedBody {
-  error: "Unauthorized";
-  reason: string;
-}
-
 /** Body returned by a BFF's `/api/access/<action>` probe when the caller is allowed. */
 export interface AccessCheckResponse {
   resource: string;
   action: string;
   allowed: true;
   user: AuthenticatedUser;
-}
-
-/** Recognises a {@link PermissionDeniedBody} in an untyped response body. */
-export function isPermissionDeniedBody(value: unknown): value is PermissionDeniedBody {
-  if (typeof value !== "object" || value === null) return false;
-  const body = value as Record<string, unknown>;
-  return body.error === "Unauthorized" && typeof body.reason === "string";
 }
 
 /** Narrows an arbitrary string (e.g. a header value) to a known {@link UserRole}. */

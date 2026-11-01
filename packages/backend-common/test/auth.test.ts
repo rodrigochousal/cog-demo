@@ -1,6 +1,6 @@
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import type { ApiErrorBody, AuthenticatedUser, PermissionDeniedBody, UserRole } from "@platform/shared-types";
+import type { ApiErrorBody, AuthenticatedUser, UserRole } from "@platform/shared-types";
 import { USER_ROLES } from "@platform/shared-types";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
@@ -9,7 +9,7 @@ import {
   createServiceApp,
   hasPermission,
   MOCK_USER_ROLE_HEADER,
-  PERMISSION_DENIED_BODY,
+  PERMISSION_DENIED_MESSAGE,
   RESOURCE_ACTIONS,
   requirePermission,
   type Resource,
@@ -141,19 +141,18 @@ describe("injectMockUser + requirePermission", () => {
     ["finance_analyst", "/api/compliance/read"],
     ["compliance_analyst", "/api/engineering/toggle"],
     ["engineer", "/api/finance/execute"],
-      ])("returns the 403 payload for %s on %s", async (role, path) => {
+  ])("returns a FORBIDDEN error envelope for %s on %s", async (role, path) => {
     const res = await call(path, role);
     expect(res.status).toBe(403);
-    expect((await res.json()) as PermissionDeniedBody).toEqual({
-      error: "Unauthorized",
-      reason: "User role does not possess required permissions for this action.",
+    expect((await res.json()) as ApiErrorBody).toEqual({
+      error: { code: "FORBIDDEN", message: "User role does not possess required permissions for this action." },
     });
-    expect(PERMISSION_DENIED_BODY.error).toBe("Unauthorized");
   });
 
   it("fails closed when no identity middleware ran", async () => {
     const res = await call("/unguarded", "admin");
     expect(res.status).toBe(403);
+    expect(((await res.json()) as ApiErrorBody).error).toEqual({ code: "FORBIDDEN", message: PERMISSION_DENIED_MESSAGE });
   });
 });
 
@@ -190,5 +189,11 @@ describe("createAccessCheckRouter", () => {
   it("returns the caller identity when allowed", async () => {
     const body = (await (await send("POST", "/approve", "admin")).json()) as { action: string; user: AuthenticatedUser };
     expect(body).toMatchObject({ action: "approve", user: { role: "admin" } });
+  });
+
+  it("denies through the shared error envelope", async () => {
+    const res = await send("POST", "/approve", "engineer");
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as ApiErrorBody).error.code).toBe("FORBIDDEN");
   });
 });

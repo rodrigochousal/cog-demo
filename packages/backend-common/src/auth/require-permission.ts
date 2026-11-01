@@ -1,19 +1,19 @@
-import type { PermissionDeniedBody } from "@platform/shared-types";
 import type { RequestHandler } from "express";
+import { HttpError } from "../http/errors.js";
 import { hasPermission, PERMISSIONS, type PermissionMatrix, type ResourceAction } from "./permissions.js";
 import "./request.js";
 
-/** Exact body returned with every RBAC 403. */
-export const PERMISSION_DENIED_BODY: Readonly<PermissionDeniedBody> = Object.freeze({
-  error: "Unauthorized",
-  reason: "User role does not possess required permissions for this action.",
-});
+/** Message carried by every RBAC 403. */
+export const PERMISSION_DENIED_MESSAGE = "User role does not possess required permissions for this action.";
+
+/** The error every RBAC denial passes to the shared error handler. */
+export const permissionDenied = (): HttpError => new HttpError(403, "FORBIDDEN", PERMISSION_DENIED_MESSAGE);
 
 /**
  * Route guard factory. Allows the request through only if the role on `req.user` may perform
- * `action` on `resource`; otherwise ends the request immediately with HTTP 403 and
- * {@link PERMISSION_DENIED_BODY}. Requests with no `req.user` (identity middleware not mounted)
- * are also denied, so the guard fails closed.
+ * `action` on `resource`; otherwise short-circuits to the shared error handler, which responds
+ * `403 { error: { code: "FORBIDDEN", message: PERMISSION_DENIED_MESSAGE } }`. Requests with no
+ * `req.user` (identity middleware not mounted) are also denied, so the guard fails closed.
  *
  * `resource`/`action` are type-checked as a pair against the matrix, so typos and mismatched
  * pairs (e.g. `"finance", "toggle"`) fail at compile time.
@@ -28,6 +28,6 @@ export function requirePermission(...args: [...ResourceAction, matrix?: Permissi
       next();
       return;
     }
-    res.status(403).json(PERMISSION_DENIED_BODY);
+    next(permissionDenied());
   };
 }
