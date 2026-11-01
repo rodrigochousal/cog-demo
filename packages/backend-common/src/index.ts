@@ -13,3 +13,4 @@ export * from "./ledger/index.js";
 export * from "./kyc/index.js";
 export * from "./http/index.js";
 export * from "./auth/index.js";
+export * from "./audit/index.js";
