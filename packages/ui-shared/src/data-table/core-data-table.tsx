@@ -283,7 +283,7 @@ export function CoreDataTable<TData extends RowData, TValue>({
             </SelectContent>
           </Select>
           <span className="tabular-nums">
-            Page {table.getPageCount() === 0 ? 0 : pageIndex + 1} of {table.getPageCount()}
+            Page {pageIndex + 1} of {Math.max(table.getPageCount(), 1)}
           </span>
           <div className="flex items-center gap-0.5">
             <Button variant="outline" size="icon-xs" aria-label="First page" onClick={() => table.firstPage()} disabled={!table.getCanPreviousPage()}>
