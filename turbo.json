@@ -1,25 +1,56 @@
 {
   "$schema": "https://turborepo.com/schema.json",
   "ui": "stream",
-  "globalEnv": ["NODE_ENV", "PLATFORM_DATA_DIR", "PLATFORM_STORAGE", "PLATFORM_SIMULATED_LATENCY_MS"],
+  "globalEnv": [
+    "NODE_ENV",
+    "PLATFORM_DATA_DIR",
+    "PLATFORM_STORAGE",
+    "PLATFORM_SIMULATED_LATENCY_MS"
+  ],
   "tasks": {
-    "build": {
-      "dependsOn": ["^build"],
-      "outputs": ["dist/**", ".next/**", "!.next/cache/**"]
+    "//#lint:boundaries": {
+      "cache": false
+    },
+    "lint": {
+      "dependsOn": [
+        "//#lint:boundaries",
+        "typecheck"
+      ]
     },
     "typecheck": {
-      "dependsOn": ["^build"]
+      "dependsOn": [
+        "^build"
+      ]
+    },
+    "build": {
+      "dependsOn": [
+        "^build"
+      ],
+      "outputs": [
+        "dist/**",
+        ".next/**",
+        "!.next/cache/**"
+      ]
     },
     "test": {
-      "dependsOn": ["^build"]
+      "dependsOn": [
+        "^build"
+      ],
+      "outputs": [
+        "coverage/**"
+      ]
     },
     "dev": {
-      "dependsOn": ["^build"],
+      "dependsOn": [
+        "^build"
+      ],
       "cache": false,
       "persistent": true
     },
     "start": {
-      "dependsOn": ["build"],
+      "dependsOn": [
+        "build"
+      ],
       "cache": false,
       "persistent": true
     },
