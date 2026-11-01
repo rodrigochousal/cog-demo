@@ -53,7 +53,7 @@ services/                 BFFs (one per app; each app's only backend)
   engineering/            Express BFF for apps/engineering                 :4002
 packages/
   backend-common/         Closed backend module shared by every service
-  shared-types/           Zero-dependency TypeScript schemas and DTOs
+  shared-types/           Zod contracts + inferred types, DTOs and domain types (only dependency: zod)
 scripts/
   check-boundaries.mjs    Enforces the import rules below (`pnpm lint:boundaries`)
   reset-data.mjs          Wipes local data (`pnpm data:reset`)
@@ -91,7 +91,8 @@ These rules are architectural. `pnpm lint:boundaries` enforces them, and `pnpm c
    - It knows nothing about any service or app and must never import from `services/*` or `apps/*`.
    - It holds surface-agnostic building blocks: the Express service bootstrap, the error envelope, logging, config, and local storage.
 4. **`packages/shared-types`: pure contracts.**
-   - It has zero dependencies and no runtime code beyond type-adjacent constants.
+   - Its only dependency is `zod`, and it has no runtime code beyond Zod schemas and type-adjacent constants.
+   - `src/contracts/*` holds the Zod API contracts; their TypeScript types are inferred from them, never hand-written.
    - `src/common.ts` holds cross-cutting types (`Money`, `ApiErrorBody`, `HealthResponse`).
    - `src/domain/*` holds shared domain records.
    - `src/dto/<surface>.ts` holds the screen-shaped request/response types for each app↔BFF pair.
@@ -157,6 +158,46 @@ async (`fs/promises`) JSON-file drivers, so everything works with zero credentia
   `PLATFORM_STORAGE=memory` runs all three connectors without touching disk.
 - **Tests.** Call `configureConnectors({ mode: "memory", latency: false })` (or `{ dataDir, latency: false }`)
   before resolving connectors, or pass fakes to a service's `createApp({ dependencies })`.
+
+## Strict runtime data contracts
+
+API contracts are Zod schemas in `packages/shared-types/src/contracts`. Each schema is the single
+source of truth for its type: services validate against the schema, and apps and services import the
+type that `z.infer` derives from it.
+
+| Schema                    | Inferred type        | Surface            | Notable rules |
+| ------------------------- | -------------------- | ------------------ | ------------- |
+| `kycRecordSchema`         | `KYCRecord`          | `apps/compliance`  | status `PENDING`/`APPROVED`/`REJECTED`, `documentUrl` absolute http(s) URL, `riskScore` 0–100, `notes` optional (defaults to `""`) |
+| `refundTransactionSchema` | `RefundTransaction`  | `apps/finance`     | `amount` > 0, status `PENDING_APPROVAL`/`PROCESSED`/`FAILED`, `currency` 3 letters (upper-cased), `createdTimestamp` ISO-8601, `approvalsReceived` distinct (defaults to `[]`) |
+| `featureFlagSchema`       | `FeatureFlagRecord`  | `apps/engineering` | `key` snake_case, `targetedTiers` distinct, `updatedAt` ISO-8601 |
+
+- Every text field is trimmed before it is checked, so a whitespace-only value counts as empty. Ids are
+  URL-safe (`[A-Za-z0-9_-]`, UUIDs included). Unknown keys are stripped.
+- Each schema also exports a `…Input` type (`z.input`), the shape a client may send before defaults
+  apply, and its status enum (`KYC_RECORD_STATUSES`, `REFUND_TRANSACTION_STATUSES`).
+- These are the app-facing contracts. The connector records in `src/domain` (`KycVerificationPayload`,
+  `RefundRecord`, `FeatureFlag`) are the data-source shapes; services map from those to these.
+
+`validateBody(schema)` from `backend-common` enforces a contract at the Express boundary. On
+POST/PUT/PATCH it parses `req.body`, replaces it with the parsed output, and types `req.body` as the
+schema's output in the handlers after it. Other methods pass through.
+
+```ts
+router.post("/v1/refunds", auditAction("CREATE_REFUND"), requirePermission("finance", "execute"),
+  validateBody(refundTransactionSchema), async (req, res) => {
+    req.body.currency; // string, already trimmed and upper-cased
+  });
+```
+
+An invalid or missing body stops the request with HTTP 400 before any handler or connector runs:
+
+```json
+{ "error": "ValidationError",
+  "issues": [{ "path": ["currency"], "field": "currency", "code": "invalid_format", "message": "Must be a 3-letter ISO-4217 currency code, e.g. USD" }] }
+```
+
+The body type is `ValidationErrorBody`. The app `api-client.ts` files raise it as a `BffError` with code
+`VALIDATION_FAILED` and the issues as `details`, and the audit trail records it as a `VALIDATION_FAILED` failure.
 
 ## Security posture
 
@@ -281,11 +322,12 @@ services/<team>/src/
 ```
 
 Every service returns errors in the same envelope, `{ "error": { "code", "message", "details?" } }`
-(`ApiErrorBody`). Apps receive these errors as `BffError`.
+(`ApiErrorBody`). The one exception is `validateBody`, which returns `{ "error": "ValidationError", "issues" }`
+(`ValidationErrorBody`). Apps receive both as `BffError`.
 
 **Throw:**
 
 - `HttpError` for request-level failures.
 - `DomainError` for violated invariants.
 
-**Validate:** pass any `safeParse`-compatible schema to `parseOrThrow`, for example a zod schema.
+**Validate:** mount `validateBody(schema)` on body-carrying routes (see [Strict runtime data contracts](#strict-runtime-data-contracts)). For other input, such as query params, pass any `safeParse`-compatible schema to `parseOrThrow`.

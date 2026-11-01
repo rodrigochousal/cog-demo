@@ -2,7 +2,7 @@
  * The only way this app reaches a backend: HTTP to its dedicated BFF.
  * No database clients, no third-party SDKs, no other services.
  */
-import type { ApiErrorBody } from "@platform/shared-types";
+import type { ApiErrorBody, ValidationErrorBody } from "@platform/shared-types";
 import { getMockRole, ROLE_HEADER } from "./mock-role";
 import { surface } from "./surface";
 
@@ -30,7 +30,10 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     throw new BffError(0, "NETWORK_ERROR", `Cannot reach the BFF at ${surface.bffUrl}. Is it running?`);
   }
   if (!res.ok) {
-    const body = (await res.json().catch(() => null)) as ApiErrorBody | null;
+    const body = (await res.json().catch(() => null)) as ApiErrorBody | ValidationErrorBody | null;
+    if (body?.error === "ValidationError") {
+      throw new BffError(res.status, "VALIDATION_FAILED", "Request validation failed", body.issues);
+    }
     throw new BffError(res.status, body?.error.code ?? "UNKNOWN", body?.error.message ?? res.statusText, body?.error.details);
   }
   return (await res.json()) as T;

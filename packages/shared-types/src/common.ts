@@ -34,3 +34,20 @@ export interface HealthResponse {
   uptimeSeconds: number;
   timestamp: ISODateString;
 }
+
+/** One field-level failure reported by request-body validation. */
+export interface ValidationIssue {
+  /** Location of the offending value, e.g. `["approvalsReceived", 1]`; `[]` for the body itself. */
+  path: (string | number)[];
+  /** `path` joined with dots (`approvalsReceived.1`), or `"(body)"` for the body itself. */
+  field: string;
+  /** Zod issue code, e.g. `invalid_type`, `too_small`, `invalid_format`, `custom`. */
+  code: string;
+  message: string;
+}
+
+/** HTTP 400 body sent by `validateBody` when a request body fails its schema. */
+export interface ValidationErrorBody {
+  error: "ValidationError";
+  issues: ValidationIssue[];
+}

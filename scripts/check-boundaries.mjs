@@ -9,7 +9,7 @@
  *                               Never on another service or any app. Source may not touch the
  *                               file system: data goes through backend-common connectors.
  *  packages/backend-common   -> npm packages + @platform/shared-types only. Never services/* or apps/*.
- *  packages/shared-types     -> zero dependencies, imports nothing outside itself.
+ *  packages/shared-types     -> no dependency but `zod` (its runtime contracts); imports nothing else outside itself.
  *  everywhere                -> relative imports may not escape their own workspace package.
  */
 import { readdirSync, readFileSync, statSync } from "node:fs";
@@ -28,6 +28,8 @@ const DB_AND_INFRA_CLIENTS = [
   "firebase", "firebase-admin", "@aws-sdk", "aws-sdk", "@google-cloud", "@azure", "axios",
 ];
 const FS_MODULES = new Set(["fs", "node:fs", "fs/promises", "node:fs/promises"]);
+/** The only package shared-types may depend on / import: its schemas are the contracts' source of truth. */
+const SHARED_TYPES_ALLOWED = new Set(["zod"]);
 const NODE_BUILTINS = new Set(builtinModules.flatMap((m) => [m, `node:${m}`]));
 
 const violations = [];
@@ -127,9 +129,13 @@ for (const p of packages) {
   const pkgFile = path.join(p.dir, "package.json");
   if (p.pkg.name === "@platform/shared-types") {
     for (const field of ["dependencies", "peerDependencies", "optionalDependencies"]) {
-      if (Object.keys(p.pkg[field] ?? {}).length) fail(pkgFile, `shared-types must have zero ${field}`);
+      for (const dep of Object.keys(p.pkg[field] ?? {})) {
+        if (!SHARED_TYPES_ALLOWED.has(dep)) fail(pkgFile, `shared-types may only depend on zod, found ${field} '${dep}'`);
+      }
     }
-    checkWorkspace(p, (spec) => `shared-types must be self-contained, found import '${spec}'`);
+    checkWorkspace(p, (spec) =>
+      SHARED_TYPES_ALLOWED.has(packageName(spec)) ? null : `shared-types must be self-contained (zod aside), found import '${spec}'`,
+    );
     continue;
   }
   for (const dep of Object.keys(allDeps(p.pkg))) {
