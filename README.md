@@ -11,6 +11,35 @@ hosted databases, or third-party infrastructure.
 | Storage  | Local JSON files or in-memory arrays (`packages/backend-common`)         |
 | Tooling  | pnpm workspaces, Turborepo, Vitest                                       |
 
+## Platform guardrail layers
+
+This platform replaces the enterprise guardrails that low-code ecosystems such as Microsoft Power Apps normally hide from you. It is made of five layers, each built as a decoupled, scalable module in this monorepo. Shared backend parts live in `packages/backend-common`, shared contracts in `packages/shared-types`, and UI parts in each `apps/*`.
+
+### 1. Granular role-based access control (RBAC)
+
+- **Framework:** a strict, type-safe permission matrix that evaluates four operational roles: `admin`, `compliance_analyst`, `finance_analyst` and `engineer`.
+- **Local implementation:** enterprise authentication is simulated with a custom HTTP header, `x-authenticated-user-role`. Express router guards reject unauthorized requests immediately with HTTP 403, before any downstream service business logic runs. The 403 uses the standard error envelope, `{ "error": { "code": "FORBIDDEN", "message": … } }`.
+
+### 2. Structural delta auditing
+
+- **Framework:** a centralized, automated logging engine that intercepts every state-changing request (POST, PUT, DELETE) and produces an immutable audit trail for compliance verification (e.g. SOC2, PCI-DSS).
+- **Local implementation:** computes object-level differences between states (`oldValue` vs `newValue`) and writes the formatted JSON payloads to standard output (`process.stdout`), the way real log aggregation agents such as Datadog or FluentBit expect.
+
+### 3. Modular service and database connectors
+
+- **Framework:** an abstract Repository/Provider pattern that separates the API business routes from the underlying persistence layer.
+- **Local implementation:** interface-driven adapters (`ILedgerDatabase`, `IKycVendorClient`) read and write data asynchronously through local file-system streams (`fs/promises`). They add simulated network latency so frontend loading states can be tested without any external database.
+
+### 4. Strict runtime data contracts
+
+- **Framework:** end-to-end type safety. Incoming application inputs are validated at the API boundary before any code runs on them.
+- **Local implementation:** `Zod` schema parsing combined with TypeScript type inference. A malformed client payload fails schema validation in the Express middleware layer, and a structured error map goes back to the calling client.
+
+### 5. High-density enterprise UI engine
+
+- **Framework:** one compact, unified dashboard interface, optimized for high-throughput data processing across internal teams.
+- **Local implementation:** `shadcn/ui` components give clean Tailwind styling, and you own all of the markup. They are paired with the headless logic engine of `TanStack Table (v9)`, which handles generic datasets, client- and server-side pagination, and advanced row filtering.
+
 ## Layout
 
 ```text
