@@ -1,0 +1,42 @@
+/**
+ * The only way this app reaches a backend: HTTP to its dedicated BFF.
+ * No database clients, no third-party SDKs, no other services.
+ */
+import type { ApiErrorBody } from "@platform/shared-types";
+import { surface } from "./surface";
+
+export class BffError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly code: string,
+    message: string,
+    public readonly details?: unknown,
+  ) {
+    super(message);
+    this.name = "BffError";
+  }
+}
+
+async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  let res: Response;
+  try {
+    res = await fetch(`${surface.bffUrl}${path}`, {
+      ...init,
+      cache: "no-store",
+      headers: { "content-type": "application/json", ...init.headers },
+    });
+  } catch {
+    throw new BffError(0, "NETWORK_ERROR", `Cannot reach the BFF at ${surface.bffUrl}. Is it running?`);
+  }
+  if (!res.ok) {
+    const body = (await res.json().catch(() => null)) as ApiErrorBody | null;
+    throw new BffError(res.status, body?.error.code ?? "UNKNOWN", body?.error.message ?? res.statusText, body?.error.details);
+  }
+  return (await res.json()) as T;
+}
+
+export const bff = {
+  get: <T>(path: string) => request<T>(path),
+  post: <T>(path: string, body: unknown) => request<T>(path, { method: "POST", body: JSON.stringify(body) }),
+  patch: <T>(path: string, body: unknown) => request<T>(path, { method: "PATCH", body: JSON.stringify(body) }),
+};

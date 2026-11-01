@@ -1,0 +1,27 @@
+{
+  "name": "internal-platform",
+  "private": true,
+  "packageManager": "pnpm@10.34.9",
+  "engines": {
+    "node": ">=20.9.0"
+  },
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "start": "turbo run start",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "lint": "pnpm lint:boundaries",
+    "lint:boundaries": "node scripts/check-boundaries.mjs",
+    "check": "pnpm lint:boundaries && turbo run typecheck test build",
+    "dev:compliance": "turbo run dev --filter=@platform/compliance-app --filter=@platform/compliance-service",
+    "dev:finance": "turbo run dev --filter=@platform/finance-app --filter=@platform/finance-service",
+    "dev:engineering": "turbo run dev --filter=@platform/engineering-app --filter=@platform/engineering-service",
+    "data:reset": "node scripts/reset-data.mjs",
+    "clean": "turbo run clean && node -e \"require('fs').rmSync('node_modules',{recursive:true,force:true})\""
+  },
+  "devDependencies": {
+    "turbo": "^2.5.8",
+    "typescript": "~5.9.3"
+  }
+}
