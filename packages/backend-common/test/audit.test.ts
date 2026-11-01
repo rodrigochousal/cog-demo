@@ -10,7 +10,6 @@ import {
   createServiceApp,
   createStdoutAuditSink,
   formatAuditLine,
-  injectMockUser,
   MOCK_USER_ROLE_HEADER,
   parseOrThrow,
   PERMISSION_DENIED_MESSAGE,
@@ -70,7 +69,6 @@ describe("auditLogger via createServiceApp", () => {
       allowedOrigins: [],
       audit: { sink: collector.sink, now: () => FIXED_NOW },
       routes: (app) => {
-        app.use("/api", injectMockUser);
         app.post(
           "/api/v1/widgets",
           auditAction("CREATE_WIDGET"),
