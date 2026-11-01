@@ -1,54 +1,77 @@
-import {
-  closeSync,
-  existsSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  renameSync,
-  statSync,
-  unlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { deepClone } from "../util.js";
-import type { DocumentStore, Seed } from "./document-store.js";
+import { assertSynchronous, type DocumentStore, type Seed } from "./document-store.js";
 
 const LOCK_TIMEOUT_MS = 5_000;
-const STALE_LOCK_MS = 10_000;
 const sleepBuffer = new Int32Array(new SharedArrayBuffer(4));
 const sleep = (ms: number) => Atomics.wait(sleepBuffer, 0, 0, ms);
 
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+/** A lock is only stale when the process that wrote it no longer exists. */
+function removeLockIfOwnerDead(lockFile: string): void {
+  let pid: number;
+  try {
+    pid = Number.parseInt(readFileSync(lockFile, "utf8").split(":")[0] ?? "", 10);
+  } catch {
+    return; // released between checks
+  }
+  if (Number.isInteger(pid) && pid > 0 && isProcessAlive(pid)) return;
+  try {
+    unlinkSync(lockFile);
+  } catch {
+    /* already removed */
+  }
+}
+
 /**
- * Cross-process advisory lock using an exclusive lock file. Several service
- * processes may share one data file (e.g. two BFFs reading the ledger), so
- * every read-modify-write cycle is serialised through this lock.
+ * Cross-process advisory lock using an exclusive lock file containing the
+ * owner's `pid:token`. Several service processes may share one data file, so
+ * every read-modify-write cycle is serialised through this lock. `fn` receives
+ * an `assertOwned` guard to call right before committing.
  */
-function withFileLock<R>(file: string, fn: () => R): R {
+function withFileLock<R>(file: string, fn: (assertOwned: () => void) => R): R {
   const lockFile = `${file}.lock`;
+  const token = `${process.pid}:${randomUUID()}`;
   const deadline = Date.now() + LOCK_TIMEOUT_MS;
-  let fd: number | undefined;
-  while (fd === undefined) {
+  for (;;) {
     try {
-      fd = openSync(lockFile, "wx");
+      writeFileSync(lockFile, token, { flag: "wx" });
+      break;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
-      try {
-        if (Date.now() - statSync(lockFile).mtimeMs > STALE_LOCK_MS) unlinkSync(lockFile);
-      } catch {
-        /* lock released between checks */
-      }
+      removeLockIfOwnerDead(lockFile);
       if (Date.now() > deadline) throw new Error(`Timed out acquiring lock on ${file}`);
       sleep(10);
     }
   }
-  try {
-    return fn();
-  } finally {
-    closeSync(fd);
+  const owned = () => {
     try {
-      unlinkSync(lockFile);
+      return readFileSync(lockFile, "utf8") === token;
     } catch {
-      /* already removed */
+      return false;
+    }
+  };
+  try {
+    return fn(() => {
+      if (!owned()) throw new Error(`Lost lock on ${file}; transaction aborted`);
+    });
+  } finally {
+    if (owned()) {
+      try {
+        unlinkSync(lockFile);
+      } catch {
+        /* already removed */
+      }
     }
   }
 }
@@ -72,8 +95,11 @@ export function createFileStore<D>(filePath: string, seed: Seed<D>): DocumentSto
 
   const load = (): D => {
     if (!existsSync(file)) {
-      withFileLock(file, () => {
-        if (!existsSync(file)) write(seed());
+      withFileLock(file, (assertOwned) => {
+        if (existsSync(file)) return;
+        const doc = seed();
+        assertOwned();
+        write(doc);
       });
     }
     const stat = statSync(file);
@@ -88,9 +114,10 @@ export function createFileStore<D>(filePath: string, seed: Seed<D>): DocumentSto
     read: () => deepClone(load()),
     transact(fn) {
       load();
-      return withFileLock(file, () => {
+      return withFileLock(file, (assertOwned) => {
         const draft = deepClone(load());
-        const result = fn(draft);
+        const result = assertSynchronous(fn(draft));
+        assertOwned();
         write(draft);
         return result;
       });

@@ -87,6 +87,8 @@ holds one JSON document and supports all-or-nothing `transact()` updates.
 - **File mode** (the default) persists data to `<repo>/.data/<name>.json`. It writes atomically (to a temp file, then renames it) and takes a cross-process lock file, so several services can share a store safely.
 - **Memory mode** (`PLATFORM_STORAGE=memory`) keeps data in in-memory arrays that are lost on restart. It is meant for tests and demos.
 - If a transaction callback throws, nothing is committed.
+- `transact()` callbacks must be synchronous. If a callback returns a Promise, the call throws and nothing is committed. Do any async work (HTTP, provider calls) before or after the transaction.
+- A lock is treated as stale only when the process that owns it has died. A transaction that finds it no longer owns its lock aborts instead of overwriting someone else's commit.
 
 There are two starter stores, and both start empty:
 
@@ -96,6 +98,10 @@ There are two starter stores, and both start empty:
 | Mock KYC provider  | `openKycMockStore()`   | `.data/kyc-mock.json` | A third-party KYC provider's database |
 
 To add a new store, call `openStore(name, seed)`. Run `pnpm data:reset` to delete all local data.
+
+## Security posture
+
+There is no authentication yet. Services bind to `127.0.0.1` by default (`HOST`), and CORS only limits which browsers can read responses; it does not authenticate callers. Add auth middleware in `backend-common` (passed to `createServiceApp`) before you expose a BFF beyond the local machine.
 
 ## Getting started
 
@@ -132,6 +138,7 @@ Each app and service has a `.env.example`. The defaults work without any `.env` 
 | --------------------- | --------- | --------------------------- | --------------------------------------- |
 | `NEXT_PUBLIC_BFF_URL` | apps      | `http://localhost:400x`     | The one backend this app calls          |
 | `PORT`                | services  | `4000` / `4001` / `4002`    | BFF listen port                         |
+| `HOST`                | services  | `127.0.0.1`                 | Bind address (loopback only by default) |
 | `APP_ORIGINS`         | services  | `http://localhost:300x`     | CORS allow-list (the paired app only)   |
 | `PLATFORM_STORAGE`    | services  | `file`                      | Set to `file` or `memory`               |
 | `PLATFORM_DATA_DIR`   | services  | `<repo>/.data`              | Location of the JSON stores             |

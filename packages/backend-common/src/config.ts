@@ -28,7 +28,7 @@ export function resolveStorageMode(): StorageMode {
 export function readPort(envVar: string, fallback: number): number {
   const raw = process.env[envVar];
   if (!raw) return fallback;
-  const port = Number.parseInt(raw, 10);
+  const port = /^\d+$/.test(raw.trim()) ? Number(raw) : Number.NaN;
   if (!Number.isInteger(port) || port <= 0 || port > 65535) {
     throw new Error(`${envVar} must be a valid TCP port, got '${raw}'`);
   }

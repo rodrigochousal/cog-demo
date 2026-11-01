@@ -1,5 +1,5 @@
 import { deepClone } from "../util.js";
-import type { DocumentStore, Seed } from "./document-store.js";
+import { assertSynchronous, type DocumentStore, type Seed } from "./document-store.js";
 
 /** Ephemeral in-memory store. Ideal for tests and throwaway demos. */
 export function createMemoryStore<D>(name: string, seed: Seed<D>): DocumentStore<D> {
@@ -9,7 +9,7 @@ export function createMemoryStore<D>(name: string, seed: Seed<D>): DocumentStore
     read: () => deepClone(state),
     transact(fn) {
       const draft = deepClone(state);
-      const result = fn(draft);
+      const result = assertSynchronous(fn(draft));
       state = draft;
       return result;
     },
