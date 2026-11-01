@@ -1,5 +1,6 @@
 import { createAccessCheckRouter, type IKycVendorClient } from "@platform/backend-common";
 import { Router } from "express";
+import { createKycRouter } from "./kyc.js";
 
 /** Connectors this surface may use, resolved by the backend-common hub. */
 export interface ApiDependencies {
@@ -17,5 +18,6 @@ export interface ApiDependencies {
 export function createApiRouter(deps: ApiDependencies): Router {
   const router = Router();
   router.use("/access", createAccessCheckRouter("compliance"));
+  router.use("/kyc", createKycRouter(deps));
   return router;
 }

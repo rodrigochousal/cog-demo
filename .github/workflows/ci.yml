@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  CI: true
+  NEXT_TELEMETRY_DISABLED: 1
+  TURBO_TELEMETRY_DISABLED: 1
+  # Connector suites use their own temp data dirs; skip the simulated vendor latency.
+  PLATFORM_SIMULATED_LATENCY_MS: "off"
+
+jobs:
+  verify:
+    name: Lint, build, test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Full history so `turbo --affected` can diff against the PR base branch.
+          fetch-depth: 0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4 # version comes from "packageManager" in package.json
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm # caches the pnpm store, keyed on pnpm-lock.yaml
+
+      - name: Cache Turborepo
+        uses: actions/cache@v4
+        with:
+          path: .turbo/cache
+          key: turbo-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.sha }}
+          restore-keys: |
+            turbo-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-
+            turbo-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Select workspace targets
+        id: scope
+        # On PRs only workspaces changed against the base branch (and their dependents) are
+        # built and tested; pushes to main verify the whole graph.
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "args=--affected" >> "$GITHUB_OUTPUT"
+          else
+            echo "args=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Lint (architecture boundaries + typecheck)
+        run: pnpm lint
+
+      - name: Build
+        run: pnpm build ${{ steps.scope.outputs.args }}
+
+      - name: Test
+        run: pnpm test ${{ steps.scope.outputs.args }}
