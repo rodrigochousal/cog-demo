@@ -48,11 +48,12 @@ export class DiskFeatureFlagProvider implements IFeatureFlagProvider, Initializa
   readonly #collection: JsonCollection<FeatureFlag>;
   readonly #now: () => Date;
 
-  constructor({ filePath, latency, now = () => new Date() }: DiskConnectorOptions) {
+  constructor({ filePath, mode, latency, now = () => new Date() }: DiskConnectorOptions) {
     this.#now = now;
     this.#collection = new JsonCollection({
       label: "feature-flags",
       filePath,
+      mode,
       latency,
       schema: featureFlagSchema,
       seed: seedFeatureFlags,

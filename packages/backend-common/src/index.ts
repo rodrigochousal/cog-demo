@@ -8,7 +8,6 @@
 export * from "./config.js";
 export * from "./errors.js";
 export * from "./util.js";
-export * from "./storage/index.js";
 export * from "./connectors/index.js";
 export * from "./http/index.js";
 export * from "./auth/index.js";

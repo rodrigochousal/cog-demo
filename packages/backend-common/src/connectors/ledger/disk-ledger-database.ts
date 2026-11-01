@@ -64,9 +64,9 @@ export class DiskLedgerDatabase implements ILedgerDatabase, InitializableConnect
   readonly #collection: JsonCollection<RefundRecord>;
   readonly #now: () => Date;
 
-  constructor({ filePath, latency, now = () => new Date() }: DiskConnectorOptions) {
+  constructor({ filePath, mode, latency, now = () => new Date() }: DiskConnectorOptions) {
     this.#now = now;
-    this.#collection = new JsonCollection({ label: "ledger", filePath, latency, schema: refundSchema, seed: seedRefunds });
+    this.#collection = new JsonCollection({ label: "ledger", filePath, mode, latency, schema: refundSchema, seed: seedRefunds });
   }
 
   async initialize(): Promise<void> {

@@ -1,5 +1,4 @@
-import { createAccessCheckRouter } from "@platform/backend-common";
-import type { ILedgerDatabase } from "@platform/backend-common";
+import { createAccessCheckRouter, type ILedgerDatabase } from "@platform/backend-common";
 import { Router } from "express";
 
 /** Connectors this surface may use, resolved by the backend-common hub. */

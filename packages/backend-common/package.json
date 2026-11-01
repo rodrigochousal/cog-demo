@@ -2,7 +2,7 @@
   "name": "@platform/backend-common",
   "version": "0.1.0",
   "private": true,
-  "description": "Closed backend module shared by all services: Express service bootstrap, error envelope, logging, config and local file/memory storage (ledger + mock KYC stores). Must never import from services/* or apps/*.",
+  "description": "Closed backend module shared by all services: Express service bootstrap, error envelope, logging, config, local JSON storage and the ledger / KYC vendor / feature-flag connectors. Must never import from services/* or apps/*.",
   "type": "module",
   "sideEffects": false,
   "exports": {

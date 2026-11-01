@@ -7,6 +7,7 @@ import type {
   RefundRecord,
   UpdateRefundInput,
 } from "@platform/shared-types";
+import type { StorageMode } from "../config.js";
 import type { LatencySetting } from "./latency.js";
 
 /**
@@ -52,6 +53,8 @@ export interface InitializableConnector {
 /** Options shared by the Disk* adapters. */
 export interface DiskConnectorOptions {
   filePath: string;
+  /** `file` (default) persists to `filePath`; `memory` keeps state in the instance, never touching disk. */
+  mode?: StorageMode;
   latency: LatencySetting;
   /** Injectable clock for deterministic tests. */
   now?: () => Date;

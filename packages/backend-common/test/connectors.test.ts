@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { CreateRefundInput, CustomerTier } from "@platform/shared-types";
@@ -258,18 +258,31 @@ describe("connector hub", () => {
   });
 
   it("reads settings from the environment", () => {
-    process.env.PLATFORM_CONNECTOR_DATA_DIR = dir;
+    process.env.PLATFORM_DATA_DIR = dir;
+    process.env.PLATFORM_STORAGE = "memory";
     process.env.PLATFORM_SIMULATED_LATENCY_MS = "off";
     try {
-      expect(resolveConnectorSettings()).toEqual({ dataDir: dir, latency: false });
+      expect(resolveConnectorSettings()).toEqual({ dataDir: dir, mode: "memory", latency: false });
     } finally {
-      delete process.env.PLATFORM_CONNECTOR_DATA_DIR;
+      delete process.env.PLATFORM_DATA_DIR;
+      delete process.env.PLATFORM_STORAGE;
       delete process.env.PLATFORM_SIMULATED_LATENCY_MS;
     }
   });
 
-  it("defaults to packages/backend-common/data", () => {
-    expect(resolveConnectorSettings().dataDir).toBe(path.resolve(import.meta.dirname, "../data"));
+  it("defaults to file storage in packages/backend-common/data", () => {
+    expect(resolveConnectorSettings()).toMatchObject({ dataDir: path.resolve(import.meta.dirname, "../data"), mode: "file" });
+  });
+
+  it("serves every connector from memory without touching disk", async () => {
+    configureConnectors({ dataDir: dir, mode: "memory", latency: false });
+    await initializeConnectors(["ledger", "kyc", "featureFlags"]);
+    const created = await getLedgerDatabase().createRecord(newRefund());
+    expect(await getLedgerDatabase().findById(created.id)).toEqual(created);
+    expect(await getLedgerDatabase().findAll()).toHaveLength(19);
+    await getFeatureFlagProvider().toggleFlag((await getFeatureFlagProvider().getFlags())[0]!.key, false);
+    expect(await getKycVendorClient().listVerificationPayloads()).toHaveLength(16);
+    expect(readdirSync(dir)).toEqual([]);
   });
 });
 

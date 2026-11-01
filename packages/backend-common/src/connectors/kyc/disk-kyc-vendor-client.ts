@@ -93,11 +93,12 @@ export class DiskKycVendorClient implements IKycVendorClient, InitializableConne
   readonly #collection: JsonCollection<KycVerificationPayload>;
   readonly #now: () => Date;
 
-  constructor({ filePath, latency, now = () => new Date() }: DiskConnectorOptions) {
+  constructor({ filePath, mode, latency, now = () => new Date() }: DiskConnectorOptions) {
     this.#now = now;
     this.#collection = new JsonCollection({
       label: "kyc-vendor",
       filePath,
+      mode,
       latency,
       schema: kycVerificationSchema,
       seed: seedKycVerifications,

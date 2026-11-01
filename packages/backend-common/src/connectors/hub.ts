@@ -1,10 +1,10 @@
 import path from "node:path";
+import { resolveDataDir, resolveStorageMode, type StorageMode } from "../config.js";
 import { DiskFeatureFlagProvider } from "./feature-flags/disk-feature-flag-provider.js";
-import type { IFeatureFlagProvider, IKycVendorClient, ILedgerDatabase, InitializableConnector } from "./interfaces.js";
+import type { DiskConnectorOptions, IFeatureFlagProvider, IKycVendorClient, ILedgerDatabase, InitializableConnector } from "./interfaces.js";
 import { DiskKycVendorClient } from "./kyc/disk-kyc-vendor-client.js";
 import { parseLatencySetting, type LatencySetting } from "./latency.js";
 import { DiskLedgerDatabase } from "./ledger/disk-ledger-database.js";
-import { DEFAULT_CONNECTOR_DATA_DIR } from "./paths.js";
 
 /**
  * Connector hub: the only place that knows which driver backs each connector
@@ -16,8 +16,10 @@ import { DEFAULT_CONNECTOR_DATA_DIR } from "./paths.js";
 export type ConnectorName = "ledger" | "kyc" | "featureFlags";
 
 export interface ConnectorSettings {
-  /** Directory holding the JSON files. Env: PLATFORM_CONNECTOR_DATA_DIR. Default: packages/backend-common/data. */
+  /** Directory holding the JSON files. Env: PLATFORM_DATA_DIR. Default: packages/backend-common/data. */
   dataDir: string;
+  /** `file` persists to `dataDir`; `memory` never touches disk (tests, demos). Env: PLATFORM_STORAGE. */
+  mode: StorageMode;
   /** Simulated network latency. Env: PLATFORM_SIMULATED_LATENCY_MS ("50-150" default, "off" to disable). */
   latency: LatencySetting;
 }
@@ -40,9 +42,9 @@ let overrides: Partial<ConnectorSettings> = {};
 let instances: { [N in ConnectorName]?: Instance<N> } = {};
 
 export function resolveConnectorSettings(): ConnectorSettings {
-  const envDir = process.env.PLATFORM_CONNECTOR_DATA_DIR;
   return {
-    dataDir: path.resolve(overrides.dataDir ?? (envDir ? envDir : DEFAULT_CONNECTOR_DATA_DIR)),
+    dataDir: path.resolve(overrides.dataDir ?? resolveDataDir()),
+    mode: overrides.mode ?? resolveStorageMode(),
     latency: overrides.latency ?? parseLatencySetting(process.env.PLATFORM_SIMULATED_LATENCY_MS),
   };
 }
@@ -64,25 +66,25 @@ export function resetConnectors(): void {
   instances = {};
 }
 
-function resolve<N extends ConnectorName>(name: N, create: (filePath: string, latency: LatencySetting) => Instance<N>): Instance<N> {
+function resolve<N extends ConnectorName>(name: N, create: (options: DiskConnectorOptions) => Instance<N>): Instance<N> {
   const existing = instances[name];
   if (existing) return existing;
-  const { dataDir, latency } = resolveConnectorSettings();
-  const created = create(path.join(dataDir, DATA_FILES[name]), latency);
+  const { dataDir, mode, latency } = resolveConnectorSettings();
+  const created = create({ filePath: path.join(dataDir, DATA_FILES[name]), mode, latency });
   instances = { ...instances, [name]: created };
   return created;
 }
 
 export function getLedgerDatabase(): ILedgerDatabase {
-  return resolve("ledger", (filePath, latency) => new DiskLedgerDatabase({ filePath, latency }));
+  return resolve("ledger", (options) => new DiskLedgerDatabase(options));
 }
 
 export function getKycVendorClient(): IKycVendorClient {
-  return resolve("kyc", (filePath, latency) => new DiskKycVendorClient({ filePath, latency }));
+  return resolve("kyc", (options) => new DiskKycVendorClient(options));
 }
 
 export function getFeatureFlagProvider(): IFeatureFlagProvider {
-  return resolve("featureFlags", (filePath, latency) => new DiskFeatureFlagProvider({ filePath, latency }));
+  return resolve("featureFlags", (options) => new DiskFeatureFlagProvider(options));
 }
 
 const RESOLVERS: { [N in ConnectorName]: () => ConnectorMap[N] } = {
