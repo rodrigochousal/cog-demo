@@ -24,6 +24,13 @@ export interface PermissionDeniedBody {
   reason: string;
 }
 
+/** Recognises a {@link PermissionDeniedBody} in an untyped response body. */
+export function isPermissionDeniedBody(value: unknown): value is PermissionDeniedBody {
+  if (typeof value !== "object" || value === null) return false;
+  const body = value as Record<string, unknown>;
+  return body.error === "Unauthorized" && typeof body.reason === "string";
+}
+
 /** Narrows an arbitrary string (e.g. a header value) to a known {@link UserRole}. */
 export function isUserRole(value: string): value is UserRole {
   return (USER_ROLES as readonly string[]).includes(value);

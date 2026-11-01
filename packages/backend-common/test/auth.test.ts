@@ -12,6 +12,7 @@ import {
   RESOURCE_ACTIONS,
   requirePermission,
   type Resource,
+  type ResourceAction,
 } from "../src/index.js";
 
 const RESOURCES = Object.keys(RESOURCE_ACTIONS) as Resource[];
@@ -20,7 +21,7 @@ const DOMAIN_ROLE: Record<Resource, UserRole> = {
   finance: "finance_analyst",
   engineering: "engineer",
 };
-const allPairs = RESOURCES.flatMap((r) => RESOURCE_ACTIONS[r].map((a) => [r, a] as const));
+const allPairs = RESOURCES.flatMap((r) => RESOURCE_ACTIONS[r].map((a) => [r, a] as ResourceAction));
 
 describe("hasPermission", () => {
   it("grants admin every action on every resource, including unknown ones", () => {
@@ -46,6 +47,7 @@ describe("injectMockUser + requirePermission", () => {
   let server: Server;
   let base: string;
   const warnings: string[] = [];
+  let writes = 0;
 
   beforeAll(async () => {
     const identity = createMockIdentityMiddleware({ warn: (m) => warnings.push(m) });
@@ -60,8 +62,12 @@ describe("injectMockUser + requirePermission", () => {
         app.get("/api/me", (req, res) => {
           res.json(req.user);
         });
-        for (const [resource, action] of allPairs) {
-          app.get(`/api/${resource}/${action}`, requirePermission(resource, action), (_req, res) => {
+        app.post("/api/finance/execute", requirePermission("finance", "execute"), (_req, res) => {
+          writes += 1;
+          res.json({ ok: true });
+        });
+        for (const pair of allPairs) {
+          app.get(`/api/${pair[0]}/${pair[1]}`, requirePermission(...pair), (_req, res) => {
             res.json({ ok: true });
           });
         }
@@ -88,12 +94,32 @@ describe("injectMockUser + requirePermission", () => {
     expect(user.role).toBe("compliance_analyst");
   });
 
-  it("defaults to finance_analyst and warns when the header is missing", async () => {
+  it("defaults reads to finance_analyst and warns only once when the header is missing", async () => {
     warnings.length = 0;
     const user = (await (await call("/api/me")).json()) as AuthenticatedUser;
+    await call("/api/me");
     expect(user.role).toBe("finance_analyst");
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain(MOCK_USER_ROLE_HEADER);
+  });
+
+  it("rejects mutating requests without the header, including cross-site simple requests", async () => {
+    writes = 0;
+    const res = await fetch(`${base}/api/finance/execute`, {
+      method: "POST",
+      headers: { origin: "http://evil.example", "content-type": "text/plain" },
+      body: "x",
+    });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as ApiErrorBody).error.code).toBe("BAD_REQUEST");
+    expect(writes).toBe(0);
+
+    const ok = await fetch(`${base}/api/finance/execute`, {
+      method: "POST",
+      headers: { [MOCK_USER_ROLE_HEADER]: "finance_analyst" },
+    });
+    expect(ok.status).toBe(200);
+    expect(writes).toBe(1);
   });
 
   it("rejects unknown roles with 400", async () => {

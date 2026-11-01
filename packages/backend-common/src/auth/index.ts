@@ -13,4 +13,5 @@
 export * from "./permissions.js";
 export * from "./mock-identity.js";
 export * from "./require-permission.js";
+// Side effect: adds `req.user` to Express's Request type for every consumer.
 export * from "./request.js";

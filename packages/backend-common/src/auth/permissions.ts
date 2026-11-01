@@ -22,6 +22,9 @@ export type Resource = keyof typeof RESOURCE_ACTIONS;
 /** Action verbs that exist for resource `R`, e.g. `Action<"finance">` is `'read' | 'execute'`. */
 export type Action<R extends Resource = Resource> = (typeof RESOURCE_ACTIONS)[R][number];
 
+/** Every valid `[resource, action]` pair, e.g. `["finance", "execute"]`. */
+export type ResourceAction = { [R in Resource]: [resource: R, action: Action<R>] }[Resource];
+
 /** Grants for a single role: resource -> allowed actions. Omitted resources are forbidden. */
 export type RoleGrants = { readonly [R in Resource]?: readonly Action<R>[] };
 

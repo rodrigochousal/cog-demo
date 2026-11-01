@@ -116,9 +116,9 @@ There is no real authentication yet. Services bind to `127.0.0.1` by default (`H
 
 The matrix is declared once in `PERMISSIONS` (`auth/permissions.ts`).
 
-**Mock identity injection.** With no identity provider, `injectMockUser` reads the `x-authenticated-user-role` header and attaches the matching mock profile to `req.user`. If the header is missing it logs a warning to stdout and uses `finance_analyst`. An unknown role gets a 400. Any caller can claim any role, so this is for local development only.
+**Mock identity injection.** With no identity provider, `injectMockUser` reads the `x-authenticated-user-role` header and attaches the matching mock profile to `req.user`. If the header is missing on a GET/HEAD/OPTIONS request it uses `finance_analyst` and logs a warning to stdout (once per process). If it's missing on a mutating request (POST/PATCH/PUT/DELETE…) the request gets a 400. This matters because a browser can send a cross-site form POST without custom headers, so a default role there would let any web page trigger actions on a local BFF. An unknown role gets a 400. Any caller can claim any role, so this is for local development only.
 
-**Route guards.** `requirePermission(resource, action)` lets the request through only if `req.user.role` is allowed to do that action on that resource. Otherwise it returns `403 { "error": "Unauthorized", "reason": "User role does not possess required permissions for this action." }`. It also denies requests when no identity middleware has run (fails closed). Resource and action names are type-checked, so `requirePermission("finance", "toggle")` won't compile.
+**Route guards.** `requirePermission(resource, action)` lets the request through only if `req.user.role` is allowed to do that action on that resource. Otherwise it returns `403 { "error": "Unauthorized", "reason": "User role does not possess required permissions for this action." }`. It also denies requests when no identity middleware has run (fails closed). The apps' `api-client.ts` turns this body into `BffError(403, "FORBIDDEN", reason)`. Resource and action names are type-checked, so `requirePermission("finance", "toggle")` won't compile.
 
 ```ts
 import { injectMockUser, requirePermission } from "@platform/backend-common";

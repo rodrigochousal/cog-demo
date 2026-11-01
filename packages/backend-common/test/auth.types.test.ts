@@ -1,7 +1,7 @@
 import { describe, expectTypeOf, it } from "vitest";
 import type { Request } from "express";
 import type { AuthenticatedUser } from "@platform/shared-types";
-import { requirePermission } from "../src/index.js";
+import { requirePermission, type Resource } from "../src/index.js";
 
 describe("RBAC typing", () => {
   it("augments Express Request with user", () => {
@@ -13,5 +13,11 @@ describe("RBAC typing", () => {
     requirePermission("finance", "toggle");
     // @ts-expect-error unknown resource
     requirePermission("payroll", "read");
+  });
+
+  it("rejects mismatched pairs even when the resource is widened", () => {
+    const resource = "finance" as Resource;
+    // @ts-expect-error 'toggle' is not valid for every Resource
+    requirePermission(resource, "toggle");
   });
 });

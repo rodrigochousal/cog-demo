@@ -6,7 +6,10 @@ import "./request.js";
 /** Header a caller (or local tooling) sets to pick which mock identity a request runs as. */
 export const MOCK_USER_ROLE_HEADER = "x-authenticated-user-role";
 
-/** Role used when the header is absent. */
+/** Methods that may fall back to the default role; mutating requests must send the header. */
+const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+
+/** Role used when the header is absent on a safe (read-only) request. */
 export const DEFAULT_MOCK_ROLE: UserRole = "finance_analyst";
 
 const titleCase = (role: UserRole) =>
@@ -23,9 +26,9 @@ export const MOCK_USERS: Readonly<Record<UserRole, Readonly<AuthenticatedUser>>>
 );
 
 export interface MockIdentityOptions {
-  /** Role to assume when the header is missing. Defaults to {@link DEFAULT_MOCK_ROLE}. */
+  /** Role to assume when the header is missing on GET/HEAD/OPTIONS. Defaults to {@link DEFAULT_MOCK_ROLE}. */
   defaultRole?: UserRole;
-  /** Receives the missing-header warning. Defaults to a one-line message on stdout. */
+  /** Receives the missing-header warning (emitted once per middleware instance). Defaults to stdout. */
   warn?: (message: string) => void;
 }
 
@@ -38,7 +41,11 @@ const warnToStdout = (message: string) => {
  * the role from the `x-authenticated-user-role` header and attaching the matching mock profile to
  * `req.user`.
  *
- * - Missing/blank header: logs a warning and falls back to `defaultRole`.
+ * - Missing/blank header on GET/HEAD/OPTIONS: falls back to `defaultRole` and logs a warning
+ *   (once per middleware instance, to avoid flooding logs).
+ * - Missing/blank header on any other method: rejects with HTTP 400. Browsers can send
+ *   cross-site "simple" requests (form POSTs) without custom headers, so defaulting a mutating
+ *   request to a privileged role would let any web page trigger actions on a local BFF.
  * - Unrecognised role: rejects with HTTP 400 (shared error envelope) rather than guessing.
  *
  * LOCAL DEVELOPMENT ONLY — any caller can claim any role. Replace with real authentication
@@ -47,14 +54,22 @@ const warnToStdout = (message: string) => {
 export function createMockIdentityMiddleware(options: MockIdentityOptions = {}): RequestHandler {
   const defaultRole = options.defaultRole ?? DEFAULT_MOCK_ROLE;
   const warn = options.warn ?? warnToStdout;
+  let warned = false;
 
   return (req, _res, next) => {
     const raw = req.get(MOCK_USER_ROLE_HEADER)?.trim().toLowerCase();
     let role: UserRole;
     if (!raw) {
-      warn(
-        `${req.method} ${req.originalUrl}: missing '${MOCK_USER_ROLE_HEADER}' header, defaulting to role '${defaultRole}'`,
-      );
+      if (!SAFE_METHODS.has(req.method)) {
+        next(new HttpError(400, "BAD_REQUEST", `'${MOCK_USER_ROLE_HEADER}' header is required for ${req.method} requests`));
+        return;
+      }
+      if (!warned) {
+        warned = true;
+        warn(
+          `missing '${MOCK_USER_ROLE_HEADER}' header (first seen on ${req.method} ${req.originalUrl}); read-only requests default to role '${defaultRole}'. Further warnings suppressed.`,
+        );
+      }
       role = defaultRole;
     } else if (isUserRole(raw)) {
       role = raw;
@@ -72,7 +87,8 @@ export function createMockIdentityMiddleware(options: MockIdentityOptions = {}):
 }
 
 /**
- * Default mock identity middleware (missing header -> `finance_analyst` + stdout warning).
+ * Default mock identity middleware (missing header: `finance_analyst` for reads + one stdout
+ * warning; 400 for writes).
  *
  * @example
  * app.use("/api", injectMockUser, createApiRouter());
