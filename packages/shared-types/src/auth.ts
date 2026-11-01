@@ -24,6 +24,14 @@ export interface PermissionDeniedBody {
   reason: string;
 }
 
+/** Body returned by a BFF's `/api/access/<action>` probe when the caller is allowed. */
+export interface AccessCheckResponse {
+  resource: string;
+  action: string;
+  allowed: true;
+  user: AuthenticatedUser;
+}
+
 /** Recognises a {@link PermissionDeniedBody} in an untyped response body. */
 export function isPermissionDeniedBody(value: unknown): value is PermissionDeniedBody {
   if (typeof value !== "object" || value === null) return false;

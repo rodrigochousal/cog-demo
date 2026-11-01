@@ -4,6 +4,7 @@ import type { ApiErrorBody, AuthenticatedUser, PermissionDeniedBody, UserRole } 
 import { USER_ROLES } from "@platform/shared-types";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
+  createAccessCheckRouter,
   createMockIdentityMiddleware,
   createServiceApp,
   hasPermission,
@@ -153,5 +154,41 @@ describe("injectMockUser + requirePermission", () => {
   it("fails closed when no identity middleware ran", async () => {
     const res = await call("/unguarded", "admin");
     expect(res.status).toBe(403);
+  });
+});
+
+describe("createAccessCheckRouter", () => {
+  let server: Server;
+  let base: string;
+  beforeAll(async () => {
+    const app = createServiceApp({
+      name: "access-test",
+      allowedOrigins: [],
+      routes: (app) => {
+        app.use("/api", createMockIdentityMiddleware({ warn: () => {} }), createAccessCheckRouter("compliance"));
+      },
+    });
+    server = app.listen(0);
+    await new Promise((r) => server.once("listening", r));
+    base = `http://localhost:${(server.address() as AddressInfo).port}`;
+  });
+  afterAll(() => server.close());
+
+  const send = (method: string, path: string, role: string) =>
+    fetch(`${base}/api${path}`, { method, headers: { [MOCK_USER_ROLE_HEADER]: role } });
+
+  it.each([
+    ["admin", 200, 200],
+    ["compliance_analyst", 200, 200],
+    ["finance_analyst", 403, 403],
+    ["engineer", 403, 403],
+  ])("%s: GET /read -> %i, POST /approve -> %i", async (role, read, approve) => {
+    expect((await send("GET", "/read", role)).status).toBe(read);
+    expect((await send("POST", "/approve", role)).status).toBe(approve);
+  });
+
+  it("returns the caller identity when allowed", async () => {
+    const body = (await (await send("POST", "/approve", "admin")).json()) as { action: string; user: AuthenticatedUser };
+    expect(body).toMatchObject({ action: "approve", user: { role: "admin" } });
   });
 });

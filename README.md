@@ -120,6 +120,8 @@ The matrix is declared once in `PERMISSIONS` (`auth/permissions.ts`).
 
 **Route guards.** `requirePermission(resource, action)` lets the request through only if `req.user.role` is allowed to do that action on that resource. Otherwise it returns `403 { "error": "Unauthorized", "reason": "User role does not possess required permissions for this action." }`. It also denies requests when no identity middleware has run (fails closed). The apps' `api-client.ts` turns this body into `BffError(403, "FORBIDDEN", reason)`. Resource and action names are type-checked, so `requirePermission("finance", "toggle")` won't compile.
 
+Every service mounts `injectMockUser` on `/api` and exposes placeholder probes from `createAccessCheckRouter(resource)`: `GET /api/access/read` and `POST /api/access/<approve|execute|toggle>`. Each app's top bar has a role dropdown. The choice is kept in a `mock-user-role` cookie, which is shared by all apps on localhost, and `api-client.ts` sends it as the header. The **Access check** card on each home page calls the probes so you can see which requests are allowed and which get Unauthorized.
+
 ```ts
 import { injectMockUser, requirePermission } from "@platform/backend-common";
 

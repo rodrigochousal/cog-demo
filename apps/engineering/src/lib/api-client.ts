@@ -3,6 +3,7 @@
  * No database clients, no third-party SDKs, no other services.
  */
 import { isPermissionDeniedBody, type ApiErrorBody } from "@platform/shared-types";
+import { getMockRole, ROLE_HEADER } from "./mock-role";
 import { surface } from "./surface";
 
 export class BffError extends Error {
@@ -23,7 +24,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     res = await fetch(`${surface.bffUrl}${path}`, {
       ...init,
       cache: "no-store",
-      headers: { "content-type": "application/json", ...init.headers },
+      headers: { "content-type": "application/json", [ROLE_HEADER]: getMockRole(), ...init.headers },
     });
   } catch {
     throw new BffError(0, "NETWORK_ERROR", `Cannot reach the BFF at ${surface.bffUrl}. Is it running?`);
