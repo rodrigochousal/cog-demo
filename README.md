@@ -101,7 +101,32 @@ To add a new store, call `openStore(name, seed)`. Run `pnpm data:reset` to delet
 
 ## Security posture
 
-There is no authentication yet. Services bind to `127.0.0.1` by default (`HOST`), and CORS only limits which browsers can read responses; it does not authenticate callers. Add auth middleware in `backend-common` (passed to `createServiceApp`) before you expose a BFF beyond the local machine.
+There is no real authentication yet. Services bind to `127.0.0.1` by default (`HOST`), and CORS only limits which browsers can read responses; it does not authenticate callers. Replace the mock identity middleware below with real authentication before you expose a BFF beyond the local machine.
+
+## Access control (RBAC)
+
+`backend-common` ships a role-based access control engine (`packages/backend-common/src/auth`); the role and user types live in `shared-types` (`UserRole`, `AuthenticatedUser`).
+
+| Role                 | compliance (KYC)   | finance (Refunds)  | engineering (Feature flags) |
+| -------------------- | ------------------ | ------------------ | --------------------------- |
+| `admin`              | everything         | everything         | everything                  |
+| `compliance_analyst` | `read`, `approve`  | —                  | —                           |
+| `finance_analyst`    | —                  | `read`, `execute`  | —                           |
+| `engineer`           | —                  | —                  | `read`, `toggle`            |
+
+The matrix is declared once in `PERMISSIONS` (`auth/permissions.ts`).
+
+**Mock identity injection.** With no identity provider, `injectMockUser` reads the `x-authenticated-user-role` header and attaches the matching mock profile to `req.user`. If the header is missing it logs a warning to stdout and uses `finance_analyst`. An unknown role gets a 400. Any caller can claim any role, so this is for local development only.
+
+**Route guards.** `requirePermission(resource, action)` lets the request through only if `req.user.role` is allowed to do that action on that resource. Otherwise it returns `403 { "error": "Unauthorized", "reason": "User role does not possess required permissions for this action." }`. It also denies requests when no identity middleware has run (fails closed). Resource and action names are type-checked, so `requirePermission("finance", "toggle")` won't compile.
+
+```ts
+import { injectMockUser, requirePermission } from "@platform/backend-common";
+
+app.use("/api", injectMockUser, router);
+router.get("/refunds", requirePermission("finance", "read"), listRefunds);
+router.post("/refunds/:id/execute", requirePermission("finance", "execute"), executeRefund);
+```
 
 ## Getting started
 
