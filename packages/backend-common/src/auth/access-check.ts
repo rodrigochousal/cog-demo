@@ -8,7 +8,7 @@ import "./request.js";
  * Placeholder endpoints that exercise the RBAC guards for one resource, with no business logic.
  * Mounts one route per action in {@link RESOURCE_ACTIONS}: `GET /read`, and `POST /<action>` for
  * every other (mutating) verb. Each route answers {@link AccessCheckResponse} when allowed and
- * the standard 403 otherwise. Mount behind {@link injectMockUser}.
+ * the standard 403 otherwise. Mount under `/api` of a `createServiceApp` app, which puts {@link injectMockUser} in front.
  *
  * @example
  * router.use("/access", createAccessCheckRouter("finance")); // GET /api/access/read, POST /api/access/execute

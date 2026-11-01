@@ -4,9 +4,9 @@
  * Mount order: identity first, then per-route guards.
  *
  * @example
- * import { injectMockUser, requirePermission } from "@platform/backend-common";
+ * import { createServiceApp, requirePermission } from "@platform/backend-common";
  *
- * app.use("/api", injectMockUser, router);
+ * createServiceApp({ ..., routes: (app) => app.use("/api", router) }); // mounts injectMockUser on /api
  * router.get("/refunds", requirePermission("finance", "read"), listRefunds);
  * router.post("/refunds/:id/execute", requirePermission("finance", "execute"), executeRefund);
  */

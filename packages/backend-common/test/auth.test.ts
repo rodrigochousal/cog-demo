@@ -55,11 +55,11 @@ describe("injectMockUser + requirePermission", () => {
     const app = createServiceApp({
       name: "auth-test",
       allowedOrigins: [],
+      identity,
       routes: (app) => {
         app.get("/unguarded", requirePermission("finance", "read"), (_req, res) => {
           res.json({ ok: true });
         });
-        app.use("/api", identity);
         app.get("/api/me", (req, res) => {
           res.json(req.user);
         });
@@ -163,8 +163,9 @@ describe("createAccessCheckRouter", () => {
     const app = createServiceApp({
       name: "access-test",
       allowedOrigins: [],
+      identity: createMockIdentityMiddleware({ warn: () => {} }),
       routes: (app) => {
-        app.use("/api", createMockIdentityMiddleware({ warn: () => {} }), createAccessCheckRouter("compliance"));
+        app.use("/api", createAccessCheckRouter("compliance"));
       },
     });
     server = app.listen(0);

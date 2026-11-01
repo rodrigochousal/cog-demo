@@ -6,7 +6,7 @@ import { Router } from "express";
  * Business rules for this surface live in this service; anything reusable by
  * another surface belongs in @platform/backend-common instead.
  *
- * Every route here runs behind `injectMockUser`; guard each one with `requirePermission`.
+ * Every route here runs behind the identity middleware `createServiceApp` mounts on `/api` (`injectMockUser`); guard each one with `requirePermission`.
  */
 export function createApiRouter(): Router {
   const router = Router();

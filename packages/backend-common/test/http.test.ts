@@ -1,8 +1,17 @@
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import type { ApiErrorBody, HealthResponse } from "@platform/shared-types";
+import type { ApiErrorBody, AuthenticatedUser, HealthResponse } from "@platform/shared-types";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createServiceApp, DomainError, HttpError, openKycMockStore, openLedgerStore } from "../src/index.js";
+import type { Express, RequestHandler } from "express";
+import {
+  createServiceApp,
+  DomainError,
+  HttpError,
+  MOCK_USER_ROLE_HEADER,
+  openKycMockStore,
+  openLedgerStore,
+  type ServiceAppOptions,
+} from "../src/index.js";
 
 let server: Server;
 let base: string;
@@ -50,6 +59,58 @@ describe("createServiceApp", () => {
     const body = (await res.json()) as ApiErrorBody;
     expect(res.status).toBe(status);
     expect(body.error.code).toBe(code);
+  });
+});
+
+describe("createServiceApp identity", () => {
+  const echoUser = (app: Express) => {
+    for (const path of ["/api/me", "/outside/me"]) {
+      app.get(path, (req, res) => {
+        res.json({ user: req.user ?? null });
+      });
+    }
+    app.post("/api/write", (req, res) => {
+      res.json({ user: req.user ?? null });
+    });
+  };
+
+  async function withApp(identity: ServiceAppOptions["identity"], fn: (base: string) => Promise<void>) {
+    const srv = createServiceApp({ name: "identity-test", allowedOrigins: [], identity, routes: echoUser }).listen(0);
+    await new Promise((r) => srv.once("listening", r));
+    try {
+      await fn(`http://localhost:${(srv.address() as AddressInfo).port}`);
+    } finally {
+      srv.close();
+    }
+  }
+  const userAt = async (url: string, init?: RequestInit) =>
+    ((await (await fetch(url, init)).json()) as { user: AuthenticatedUser | null }).user;
+
+  it("mounts injectMockUser on /api by default, and nowhere else", async () => {
+    await withApp(undefined, async (base) => {
+      const headers = { [MOCK_USER_ROLE_HEADER]: "engineer" };
+      expect((await userAt(`${base}/api/me`, { headers }))?.role).toBe("engineer");
+      expect(await userAt(`${base}/outside/me`, { headers })).toBeNull();
+      expect((await fetch(`${base}/health`)).status).toBe(200);
+      expect((await fetch(`${base}/api/write`, { method: "POST" })).status).toBe(400);
+    });
+  });
+
+  it("uses a custom identity middleware when given", async () => {
+    const custom: RequestHandler = (req, _res, next) => {
+      req.user = { id: "u1", name: "Custom", role: "admin" };
+      next();
+    };
+    await withApp(custom, async (base) => {
+      expect(await userAt(`${base}/api/me`)).toEqual({ id: "u1", name: "Custom", role: "admin" });
+    });
+  });
+
+  it("mounts no identity when disabled", async () => {
+    await withApp(false, async (base) => {
+      expect(await userAt(`${base}/api/me`, { headers: { [MOCK_USER_ROLE_HEADER]: "admin" } })).toBeNull();
+      expect((await fetch(`${base}/api/write`, { method: "POST" })).status).toBe(200);
+    });
   });
 });
 
