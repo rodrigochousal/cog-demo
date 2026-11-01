@@ -2,6 +2,7 @@ import type { Server } from "node:http";
 import type { HealthResponse } from "@platform/shared-types";
 import cors from "cors";
 import express, { type Express, type RequestHandler } from "express";
+import { auditLogger, type AuditLoggerOptions } from "../audit/middleware.js";
 import { injectMockUser } from "../auth/mock-identity.js";
 import { createErrorHandler, notFoundHandler } from "./errors.js";
 import { createLogger, type Logger } from "./logger.js";
@@ -13,6 +14,11 @@ export interface ServiceAppOptions {
   allowedOrigins: string[];
   logger?: Logger;
   /**
+   * Audit trail for POST/PUT/PATCH/DELETE (see `auditLogger`), on by default with `name` as
+   * `targetService` and lines on stdout. Pass options to customise, or `false` to disable.
+   */
+  audit?: Omit<AuditLoggerOptions, "targetService"> | false;
+  /**
    * Identity middleware mounted on `/api` ahead of the routes; it sets `req.user` (not on `/health`).
    * Defaults to `injectMockUser`. Pass a custom middleware to replace it, or `false` to disable.
    */
@@ -23,8 +29,8 @@ export interface ServiceAppOptions {
 
 /**
  * Builds an Express app with the platform's standard middleware stack:
- * CORS locked to the paired frontend, JSON parsing, request logging,
- * `/health`, identity on `/api`, 404 handling and the shared error envelope.
+ * CORS locked to the paired frontend, the audit trail, JSON parsing, request
+ * logging, `/health`, identity on `/api`, 404 handling and the shared error envelope.
  */
 export function createServiceApp(options: ServiceAppOptions): Express {
   const logger = options.logger ?? createLogger(options.name);
@@ -33,6 +39,16 @@ export function createServiceApp(options: ServiceAppOptions): Express {
 
   app.disable("x-powered-by");
   app.use(cors({ origin: options.allowedOrigins }));
+  if (options.audit !== false) {
+    app.use(
+      auditLogger({
+        onError: (error) =>
+          logger.error("Failed to write audit line", { error: error instanceof Error ? error.stack : String(error) }),
+        ...options.audit,
+        targetService: options.name,
+      }),
+    );
+  }
   app.use(express.json({ limit: "100kb" }));
   app.use((req, res, next) => {
     const start = process.hrtime.bigint();
