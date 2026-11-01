@@ -8,8 +8,6 @@ import {
   DomainError,
   HttpError,
   MOCK_USER_ROLE_HEADER,
-  openKycMockStore,
-  openLedgerStore,
   type ServiceAppOptions,
 } from "../src/index.js";
 
@@ -114,14 +112,3 @@ describe("createServiceApp identity", () => {
   });
 });
 
-describe("local stores", () => {
-  it("start empty and persist appended records", () => {
-    const ledger = openLedgerStore({ mode: "memory" });
-    expect(ledger.read().entries).toEqual([]);
-    ledger.transact((d) =>
-      d.entries.push({ id: "le_1", accountId: "acc_1", amount: { amountMinor: 100, currency: "USD" }, reference: "t", createdAt: new Date().toISOString() }),
-    );
-    expect(ledger.read().entries).toHaveLength(1);
-    expect(openKycMockStore({ mode: "memory" }).read().records).toEqual([]);
-  });
-});

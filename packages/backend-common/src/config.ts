@@ -1,21 +1,16 @@
-import { existsSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-/** Walks up from `start` to the directory containing pnpm-workspace.yaml. */
-export function findWorkspaceRoot(start: string = process.cwd()): string {
-  let dir = path.resolve(start);
-  for (;;) {
-    if (existsSync(path.join(dir, "pnpm-workspace.yaml"))) return dir;
-    const parent = path.dirname(dir);
-    if (parent === dir) return path.resolve(start);
-    dir = parent;
-  }
-}
+/** `packages/backend-common/` — config sits at the same depth in `src/` and `dist/`. */
+const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-/** Directory holding the local JSON ledgers / mock databases. Override with PLATFORM_DATA_DIR. */
+/** Default home of every local JSON collection: `packages/backend-common/data/`. */
+export const DEFAULT_DATA_DIR = path.join(PACKAGE_ROOT, "data");
+
+/** Directory holding the local JSON collections. Override with PLATFORM_DATA_DIR. */
 export function resolveDataDir(): string {
   const fromEnv = process.env.PLATFORM_DATA_DIR;
-  return fromEnv ? path.resolve(fromEnv) : path.join(findWorkspaceRoot(), ".data");
+  return fromEnv ? path.resolve(fromEnv) : DEFAULT_DATA_DIR;
 }
 
 export type StorageMode = "file" | "memory";

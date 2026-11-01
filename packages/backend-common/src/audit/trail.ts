@@ -15,7 +15,7 @@ export interface AuditTrailState {
  * Per-request audit recorder, available as `req.audit` (or via `useAudit(req)`) on mutating
  * requests. Handlers hand it the record's state before and after the change; every method
  * takes a detached snapshot immediately, so mutating the record afterwards cannot rewrite
- * history. All methods are synchronous and safe to call inside `DocumentStore.transact`.
+ * history. All methods are synchronous, so snapshots can be taken between connector calls or inside a `mutate` callback.
  */
 export class AuditTrail {
   #state: AuditTrailState = { before: null, after: null };

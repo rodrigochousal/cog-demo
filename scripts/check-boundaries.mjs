@@ -6,7 +6,8 @@
  *                               src/lib/api-client.ts (the only file allowed to call fetch).
  *                               No backend packages, Node built-ins or database/infra clients.
  *  services/<x>              -> may depend on @platform/backend-common and @platform/shared-types.
- *                               Never on another service or any app.
+ *                               Never on another service or any app. Source may not touch the
+ *                               file system: data goes through backend-common connectors.
  *  packages/backend-common   -> npm packages + @platform/shared-types only. Never services/* or apps/*.
  *  packages/shared-types     -> zero dependencies, imports nothing outside itself.
  *  everywhere                -> relative imports may not escape their own workspace package.
@@ -26,6 +27,7 @@ const DB_AND_INFRA_CLIENTS = [
   "knex", "typeorm", "sequelize", "drizzle-orm", "@prisma/client", "prisma", "@supabase/supabase-js",
   "firebase", "firebase-admin", "@aws-sdk", "aws-sdk", "@google-cloud", "@azure", "axios",
 ];
+const FS_MODULES = new Set(["fs", "node:fs", "fs/promises", "node:fs/promises"]);
 const NODE_BUILTINS = new Set(builtinModules.flatMap((m) => [m, `node:${m}`]));
 
 const violations = [];
@@ -111,9 +113,11 @@ for (const svc of services) {
   for (const dep of Object.keys(allDeps(svc.pkg))) {
     if (servicePkgs.has(dep) || appPkgs.has(dep)) fail(pkgFile, `services must not depend on other services or apps (${dep})`);
   }
-  checkWorkspace(svc, (spec) => {
+  checkWorkspace(svc, (spec, file) => {
     const name = packageName(spec);
     if (servicePkgs.has(name) || appPkgs.has(name)) return `services may not import ${name}; move shared code to @platform/backend-common`;
+    const inSrc = file.startsWith(path.join(svc.dir, "src") + path.sep);
+    if (inSrc && FS_MODULES.has(spec)) return `service source may not import '${spec}'; resolve data through the backend-common connector hub (getLedgerDatabase() etc.)`;
     return null;
   });
 }

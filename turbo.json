@@ -1,7 +1,7 @@
 {
   "$schema": "https://turborepo.com/schema.json",
   "ui": "stream",
-  "globalEnv": ["NODE_ENV", "PLATFORM_DATA_DIR"],
+  "globalEnv": ["NODE_ENV", "PLATFORM_DATA_DIR", "PLATFORM_STORAGE", "PLATFORM_SIMULATED_LATENCY_MS"],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],

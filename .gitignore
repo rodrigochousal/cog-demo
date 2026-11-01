@@ -12,5 +12,5 @@ next-env.d.ts
 npm-debug.log*
 pnpm-debug.log*
 
-# Local file-based ledgers / mock databases (seeded on first boot)
-.data/
+# Local JSON data (seeded on first boot)
+packages/backend-common/data/

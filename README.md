@@ -8,7 +8,7 @@ hosted databases, or third-party infrastructure.
 | -------- | ------------------------------------------------------------------------ |
 | Frontend | Next.js (App Router), TypeScript, Tailwind CSS v4, shadcn/ui, TanStack Table |
 | Backend  | Node.js, Express 5, TypeScript                                           |
-| Storage  | Local JSON files or in-memory arrays (`packages/backend-common`)         |
+| Storage  | Local JSON files or in-memory collections (`packages/backend-common`)    |
 | Tooling  | pnpm workspaces, Turborepo, Vitest                                       |
 
 ## Platform guardrail layers
@@ -63,7 +63,7 @@ scripts/
 
 ```text
  apps/compliance ──HTTP──▶ services/compliance ─┐
- apps/finance    ──HTTP──▶ services/finance    ─┼──▶ packages/backend-common ──▶ .data/*.json
+ apps/finance    ──HTTP──▶ services/finance    ─┼──▶ packages/backend-common ──▶ data/*.json
  apps/engineering──HTTP──▶ services/engineering─┘
         │                         │                          │
         └──────────────── packages/shared-types ─────────────┘
@@ -110,23 +110,53 @@ These rules are architectural. `pnpm lint:boundaries` enforces them, and `pnpm c
 
 ## Local storage (no database)
 
-`packages/backend-common` stands in for infrastructure with **document stores**. A document store
-holds one JSON document and supports all-or-nothing `transact()` updates.
+`packages/backend-common` has one storage engine, `JsonCollection` (`src/connectors/json-collection.ts`).
+It sits behind every connector below and is internal to the package. A collection is a versioned JSON
+document (`{ schemaVersion, records }`). It is read and written asynchronously, and changed only through
+all-or-nothing `mutate()` calls.
 
-- **File mode** (the default) persists data to `<repo>/.data/<name>.json`. It writes atomically (to a temp file, then renames it) and takes a cross-process lock file, so several services can share a store safely.
-- **Memory mode** (`PLATFORM_STORAGE=memory`) keeps data in in-memory arrays that are lost on restart. It is meant for tests and demos.
-- If a transaction callback throws, nothing is committed.
-- `transact()` callbacks must be synchronous. If a callback returns a Promise, the call throws and nothing is committed. Do any async work (HTTP, provider calls) before or after the transaction.
-- A lock is treated as stale only when the process that owns it has died. A transaction that finds it no longer owns its lock aborts instead of overwriting someone else's commit.
+- **File mode** (the default, `PLATFORM_STORAGE=file`) keeps each collection in
+  `packages/backend-common/data/<name>.json` (override the folder with `PLATFORM_DATA_DIR`).
+  Writes are atomic (temp file, then rename) and take a cross-process `<file>.lock`, so several services
+  can safely share a file.
+- **Memory mode** (`PLATFORM_STORAGE=memory`) keeps each collection inside its instance and never touches
+  disk. Data is seeded the same way and lost on restart. It is meant for tests and demos.
+- If a `mutate()` callback throws, nothing is written. Records are validated against the collection's
+  schema before every write and after every read.
+- `mutate()` callbacks must be synchronous. If a callback returns a Promise, the call rejects and nothing
+  is written. Do any async work (HTTP, provider calls) before or after the mutation.
+- A lock is treated as stale only when the process that owns it has died. A writer that finds it no longer
+  owns its lock aborts instead of overwriting someone else's commit.
 
-There are two starter stores, and both start empty:
+Run `pnpm data:reset` to delete all local data; collections are re-seeded on next access.
 
-| Store              | API                    | File                  | Stands in for                    |
-| ------------------ | ---------------------- | --------------------- | -------------------------------- |
-| Transactional ledger | `openLedgerStore()`  | `.data/ledger.json`   | A ledger database (append-only `LedgerEntry[]`) |
-| Mock KYC provider  | `openKycMockStore()`   | `.data/kyc-mock.json` | A third-party KYC provider's database |
+## Service & database connectors
 
-To add a new store, call `openStore(name, seed)`. Run `pnpm data:reset` to delete all local data.
+In production each BFF would talk to a PostgreSQL cluster or a SaaS vendor API. Locally, those
+dependencies are replaced by **connectors**: interfaces in `backend-common/src/connectors`, backed by
+async (`fs/promises`) JSON-file drivers, so everything works with zero credentials.
+
+| Connector interface    | Hub factory                | Used by                | Data file (`packages/backend-common/data/`) | Stands in for |
+| ---------------------- | -------------------------- | ---------------------- | ------------------------------------------- | ------------- |
+| `ILedgerDatabase`      | `getLedgerDatabase()`      | `services/finance`     | `ledger.json` (refunds)                     | Finance PostgreSQL cluster |
+| `IKycVendorClient`     | `getKycVendorClient()`     | `services/compliance`  | `kyc-vendor.json` (verification payloads)   | Persona / Alloy REST APIs |
+| `IFeatureFlagProvider` | `getFeatureFlagProvider()` | `services/engineering` | `feature-flags.json`                        | LaunchDarkly / Unleash |
+
+- **Hub only.** Services resolve connectors through the hub factories and pass them to their routers as
+  `ApiDependencies`. The `Disk*` drivers are not exported, and `pnpm lint:boundaries` rejects `fs` imports
+  in `services/*/src`, so handlers never see file paths or the storage driver.
+- **Seeding.** If a data file is missing (first boot, or after `pnpm data:reset`), the driver creates the
+  directory and seeds it with realistic mock data (15+ records per file). Services call
+  `initializeConnectors([...])` at boot so seeding happens before the first request.
+- **Simulated latency.** Every read and write waits a pseudo-random 50–150 ms
+  (`PLATFORM_SIMULATED_LATENCY_MS`, e.g. `80`, `20-60` or `off`) so frontends show their loading states.
+- **Errors.** Unknown ids → `NOT_FOUND` (404); blank ids or invalid input → `BUSINESS_RULE_VIOLATION`
+  (422); deciding an already-finalised KYC applicant → `CONFLICT` (409). All use the shared error envelope.
+  Unreadable or corrupt data files raise `ConnectorError`, which is logged and returned as a 500.
+- **Storage.** Every driver is a `JsonCollection` (see [Local storage](#local-storage-no-database)), so
+  `PLATFORM_STORAGE=memory` runs all three connectors without touching disk.
+- **Tests.** Call `configureConnectors({ mode: "memory", latency: false })` (or `{ dataDir, latency: false }`)
+  before resolving connectors, or pass fakes to a service's `createApp({ dependencies })`.
 
 ## Security posture
 
@@ -174,20 +204,17 @@ Every POST, PUT, PATCH and DELETE handled by any BFF writes one audit line to st
 - **Delta.** `computeDelta(old, new)` is pure. A create gives `{ oldValue: null, newValue: <record> }`. A delete gives `{ oldValue: <record>, newValue: null }`. An update keeps only the changed keys on both sides and keeps the nested structure. Keys such as `password`, `token` and `cardNumber` (see `DEFAULT_REDACT_KEYS`) are written as `"[REDACTED]"`.
 - **Non-blocking.** The line is written with `setImmediate` after the response is sent. If auditing throws, the error is logged and the request is unaffected.
 
-Handlers add business context. `auditAction` names the action and should come first so that RBAC and validation failures are still labelled. `useAudit(req)` returns the trail for recording snapshots. It throws if the audit middleware isn't mounted, so a mutation can't silently skip its audit line. Snapshots are synchronous copies, so you can take them inside `transact()`:
+Handlers add business context. `auditAction` names the action and should come first so that RBAC and validation failures are still labelled. `useAudit(req)` returns the trail for recording snapshots. It throws if the audit middleware isn't mounted, so a mutation can't silently skip its audit line. Snapshots are synchronous copies, so take them right after reading and right after writing through the connector:
 
 ```ts
 import { auditAction, requirePermission, useAudit } from "@platform/backend-common";
 
-router.post("/v1/refunds/:id/execute", auditAction("EXECUTE_REFUND"), requirePermission("finance", "execute"), (req, res) => {
+router.post("/v1/refunds/:id/execute", auditAction("EXECUTE_REFUND"), requirePermission("finance", "execute"), async (req, res) => {
   const audit = useAudit(req);
-  const refund = refunds.transact((draft) => {
-    const refund = draft[req.params.id];
-    audit.before(refund);
-    refund.status = "EXECUTED";
-    audit.after(refund);
-    return refund;
-  });
+  const id = String(req.params.id);
+  audit.before(await deps.ledger.findById(id));
+  const refund = await deps.ledger.updateRecord(id, { status: "approved" });
+  audit.after(refund);
   res.json(refund);
 });
 ```
@@ -216,7 +243,7 @@ calls its BFF's `/health` endpoint to confirm the app → BFF wiring works.
 | `pnpm test`            | Runs Vitest suites (`backend-common` and each service)  |
 | `pnpm lint:boundaries` | Checks the architecture boundary rules                  |
 | `pnpm check`           | Runs boundaries, typecheck, test, and build together. Use it before opening a PR |
-| `pnpm data:reset`      | Deletes `.data/`                                        |
+| `pnpm data:reset`      | Deletes `packages/backend-common/data/` (or `PLATFORM_DATA_DIR`) |
 | `pnpm clean`           | Removes build output and `node_modules`                 |
 
 ### Environment variables
@@ -229,8 +256,9 @@ Each app and service has a `.env.example`. The defaults work without any `.env` 
 | `PORT`                | services  | `4000` / `4001` / `4002`    | BFF listen port                         |
 | `HOST`                | services  | `127.0.0.1`                 | Bind address (loopback only by default) |
 | `APP_ORIGINS`         | services  | `http://localhost:300x`     | CORS allow-list (the paired app only)   |
-| `PLATFORM_STORAGE`    | services  | `file`                      | Set to `file` or `memory`               |
-| `PLATFORM_DATA_DIR`   | services  | `<repo>/.data`              | Location of the JSON stores             |
+| `PLATFORM_STORAGE`    | services  | `file`                      | `file` persists to disk; `memory` never touches disk |
+| `PLATFORM_DATA_DIR`   | services  | `packages/backend-common/data` | Location of the local JSON data files |
+| `PLATFORM_SIMULATED_LATENCY_MS` | services | `50-150` | Simulated connector latency (`off` disables) |
 
 ## Anatomy of a surface
 
