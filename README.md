@@ -149,12 +149,14 @@ The matrix is declared once in `PERMISSIONS` (`auth/permissions.ts`).
 
 **Route guards.** `requirePermission(resource, action)` lets the request through only if `req.user.role` is allowed to do that action on that resource. Otherwise it passes `HttpError(403, "FORBIDDEN", …)` to the shared error handler, so the response uses the standard envelope: `403 { "error": { "code": "FORBIDDEN", "message": "User role does not possess required permissions for this action." } }`. It also denies requests when no identity middleware has run (fails closed). The apps' `api-client.ts` needs no special case; the denial surfaces as `BffError(403, "FORBIDDEN", message)`. Resource and action names are type-checked, so `requirePermission("finance", "toggle")` won't compile.
 
-Every service mounts `injectMockUser` on `/api` and exposes placeholder probes from `createAccessCheckRouter(resource)`: `GET /api/access/read` and `POST /api/access/<approve|execute|toggle>`. Each app's top bar has a role dropdown. The choice is kept in a `mock-user-role` cookie, which is shared by all apps on localhost, and `api-client.ts` sends it as the header. The **Access check** card on each home page calls the probes so you can see which requests are allowed and which get Unauthorized.
+**Where identity is mounted.** `createServiceApp` mounts identity on `/api` ahead of the service's routes, so each service only calls `app.use("/api", createApiRouter())`. `/health` and anything else outside `/api` never sees it. The `identity` option defaults to `injectMockUser`. Pass a different middleware to replace it (e.g. real auth later), or `false` to turn it off.
+
+Every service exposes placeholder probes from `createAccessCheckRouter(resource)`: `GET /api/access/read` and `POST /api/access/<approve|execute|toggle>`. Each app's top bar has a role dropdown. The choice is kept in a `mock-user-role` cookie, which is shared by all apps on localhost, and `api-client.ts` sends it as the header. The **Access check** card on each home page calls the probes so you can see which requests are allowed and which get Unauthorized.
 
 ```ts
-import { injectMockUser, requirePermission } from "@platform/backend-common";
+import { createServiceApp, requirePermission } from "@platform/backend-common";
 
-app.use("/api", injectMockUser, router);
+createServiceApp({ name, allowedOrigins, routes: (app) => app.use("/api", router) }); // identity: injectMockUser by default
 router.get("/refunds", requirePermission("finance", "read"), listRefunds);
 router.post("/refunds/:id/execute", requirePermission("finance", "execute"), executeRefund);
 ```
@@ -245,7 +247,7 @@ apps/<team>/src/
 
 services/<team>/src/
   index.ts                Process entry point (port, graceful shutdown)
-  app.ts                  createServiceApp(): CORS, audit, JSON, logging, /health, 404, error envelope
+  app.ts                  createServiceApp(): CORS, audit, JSON, logging, /health, identity on /api, 404, error envelope
   config.ts               PORT / APP_ORIGINS
   routes/index.ts         Screen-shaped endpoints mounted at /api
 ```

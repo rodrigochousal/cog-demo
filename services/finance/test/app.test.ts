@@ -24,3 +24,10 @@ it("returns the shared 404 envelope for unknown API routes", async () => {
   expect(res.status).toBe(404);
   expect(await res.json()).toMatchObject({ error: { code: "NOT_FOUND" } });
 });
+
+it("sets the caller identity on /api and guards the access probes", async () => {
+  const as = (role: string) => ({ method: "POST", headers: { "x-authenticated-user-role": role } });
+  expect((await fetch(`${base}/api/access/execute`, as("admin"))).status).toBe(200);
+  expect((await fetch(`${base}/api/access/execute`, as("engineer"))).status).toBe(403);
+  expect((await fetch(`${base}/api/access/execute`, { method: "POST" })).status).toBe(400);
+});

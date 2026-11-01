@@ -1,8 +1,9 @@
 import type { Server } from "node:http";
 import type { HealthResponse } from "@platform/shared-types";
 import cors from "cors";
-import express, { type Express } from "express";
+import express, { type Express, type RequestHandler } from "express";
 import { auditLogger, type AuditLoggerOptions } from "../audit/middleware.js";
+import { injectMockUser } from "../auth/mock-identity.js";
 import { createErrorHandler, notFoundHandler } from "./errors.js";
 import { createLogger, type Logger } from "./logger.js";
 
@@ -17,6 +18,11 @@ export interface ServiceAppOptions {
    * `targetService` and lines on stdout. Pass options to customise, or `false` to disable.
    */
   audit?: Omit<AuditLoggerOptions, "targetService"> | false;
+  /**
+   * Identity middleware mounted on `/api` ahead of the routes; it sets `req.user` (not on `/health`).
+   * Defaults to `injectMockUser`. Pass a custom middleware to replace it, or `false` to disable.
+   */
+  identity?: RequestHandler | false;
   /** Mount the service's routers. Called after common middleware, before error handling. */
   routes: (app: Express) => void;
 }
@@ -24,7 +30,7 @@ export interface ServiceAppOptions {
 /**
  * Builds an Express app with the platform's standard middleware stack:
  * CORS locked to the paired frontend, the audit trail, JSON parsing, request
- * logging, `/health`, 404 handling and the shared error envelope.
+ * logging, `/health`, identity on `/api`, 404 handling and the shared error envelope.
  */
 export function createServiceApp(options: ServiceAppOptions): Express {
   const logger = options.logger ?? createLogger(options.name);
@@ -62,6 +68,10 @@ export function createServiceApp(options: ServiceAppOptions): Express {
     };
     res.json(body);
   });
+
+  if (options.identity !== false) {
+    app.use("/api", options.identity ?? injectMockUser);
+  }
 
   options.routes(app);
 
