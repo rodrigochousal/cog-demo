@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { suiteLinks, surface } from "@/lib/surface";
+import { RoleSwitcher } from "./role-switcher";
 
 export function AppShell({ children }: { children: ReactNode }) {
   return (
@@ -25,6 +26,7 @@ export function AppShell({ children }: { children: ReactNode }) {
               </a>
             ))}
           </nav>
+          <RoleSwitcher />
           <div className="ml-auto font-mono text-xs text-muted-foreground">BFF: {surface.bffUrl}</div>
         </div>
       </header>

@@ -130,7 +130,34 @@ To add a new store, call `openStore(name, seed)`. Run `pnpm data:reset` to delet
 
 ## Security posture
 
-There is no authentication yet. Services bind to `127.0.0.1` by default (`HOST`), and CORS only limits which browsers can read responses; it does not authenticate callers. Add auth middleware in `backend-common` (passed to `createServiceApp`) before you expose a BFF beyond the local machine.
+There is no real authentication yet. Services bind to `127.0.0.1` by default (`HOST`), and CORS only limits which browsers can read responses; it does not authenticate callers. Replace the mock identity middleware below with real authentication before you expose a BFF beyond the local machine.
+
+## Access control (RBAC)
+
+`backend-common` ships a role-based access control engine (`packages/backend-common/src/auth`); the role and user types live in `shared-types` (`UserRole`, `AuthenticatedUser`).
+
+| Role                 | compliance (KYC)   | finance (Refunds)  | engineering (Feature flags) |
+| -------------------- | ------------------ | ------------------ | --------------------------- |
+| `admin`              | everything         | everything         | everything                  |
+| `compliance_analyst` | `read`, `approve`  | —                  | —                           |
+| `finance_analyst`    | —                  | `read`, `execute`  | —                           |
+| `engineer`           | —                  | —                  | `read`, `toggle`            |
+
+The matrix is declared once in `PERMISSIONS` (`auth/permissions.ts`).
+
+**Mock identity injection.** With no identity provider, `injectMockUser` reads the `x-authenticated-user-role` header and attaches the matching mock profile to `req.user`. If the header is missing on a GET/HEAD/OPTIONS request it uses `finance_analyst` and logs a warning to stdout (once per process). If it's missing on a mutating request (POST/PATCH/PUT/DELETE…) the request gets a 400. This matters because a browser can send a cross-site form POST without custom headers, so a default role there would let any web page trigger actions on a local BFF. An unknown role gets a 400. Any caller can claim any role, so this is for local development only.
+
+**Route guards.** `requirePermission(resource, action)` lets the request through only if `req.user.role` is allowed to do that action on that resource. Otherwise it passes `HttpError(403, "FORBIDDEN", …)` to the shared error handler, so the response uses the standard envelope: `403 { "error": { "code": "FORBIDDEN", "message": "User role does not possess required permissions for this action." } }`. It also denies requests when no identity middleware has run (fails closed). The apps' `api-client.ts` needs no special case; the denial surfaces as `BffError(403, "FORBIDDEN", message)`. Resource and action names are type-checked, so `requirePermission("finance", "toggle")` won't compile.
+
+Every service mounts `injectMockUser` on `/api` and exposes placeholder probes from `createAccessCheckRouter(resource)`: `GET /api/access/read` and `POST /api/access/<approve|execute|toggle>`. Each app's top bar has a role dropdown. The choice is kept in a `mock-user-role` cookie, which is shared by all apps on localhost, and `api-client.ts` sends it as the header. The **Access check** card on each home page calls the probes so you can see which requests are allowed and which get Unauthorized.
+
+```ts
+import { injectMockUser, requirePermission } from "@platform/backend-common";
+
+app.use("/api", injectMockUser, router);
+router.get("/refunds", requirePermission("finance", "read"), listRefunds);
+router.post("/refunds/:id/execute", requirePermission("finance", "execute"), executeRefund);
+```
 
 ## Getting started
 

@@ -1,7 +1,16 @@
 /** Identity of this UI surface and its paired BFF. */
-export const surface = {
+export const surface: {
+  team: string;
+  product: string;
+  resource: string;
+  actions: readonly string[];
+  bffUrl: string;
+} = {
   team: "DevOps & Site Reliability",
   product: "Feature-Flag Panel",
+  /** RBAC resource this surface's BFF guards, and its action verbs (`read` is GET, others POST). */
+  resource: "engineering",
+  actions: ["read", "toggle"],
   bffUrl: process.env.NEXT_PUBLIC_BFF_URL ?? "http://localhost:4002",
 };
 
