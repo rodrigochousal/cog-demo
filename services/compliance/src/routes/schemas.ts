@@ -1,4 +1,4 @@
-import { KYC_DECISION_OUTCOMES, type KycManualDecisionInput } from "@platform/shared-types";
+import { KYC_DECISION_OUTCOMES, type KycManualDecisionInput } from "@platform/backend-common";
 import { z } from "zod";
 
 /** Path params for routes addressing one applicant's verification. */

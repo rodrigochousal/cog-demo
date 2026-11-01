@@ -1,5 +1,5 @@
-import type { ApiErrorBody, KycManualDecisionInput, KycVerificationPayload } from "@platform/shared-types";
-import type { IKycVendorClient } from "@platform/backend-common";
+import type { IKycVendorClient, KycManualDecisionInput, KycVerification } from "@platform/backend-common";
+import type { ApiErrorBody, KycReviewQueueResponse, KycReviewRow } from "@platform/shared-types";
 import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { createApp } from "../src/app.js";
@@ -12,8 +12,8 @@ type KycSpies = { [K in keyof IKycVendorClient]: Mock<IKycVendorClient[K]> };
  */
 const kycDriver = vi.hoisted(
   (): KycSpies => ({
-    listVerificationPayloads: vi.fn(),
-    getVerificationPayload: vi.fn(),
+    listVerifications: vi.fn(),
+    getVerification: vi.fn(),
     submitManualDecision: vi.fn(),
   }),
 );
@@ -27,10 +27,11 @@ const ROLE_HEADER = "x-authenticated-user-role";
 const APPLICANT_ID = "app_1001";
 const DECISIONS_PATH = `/api/kyc/verifications/${APPLICANT_ID}/decisions`;
 
-const pendingPayload: KycVerificationPayload = {
+const pendingPayload: KycVerification = {
   applicantId: APPLICANT_ID,
-  vendorReference: "inq_test_1001",
   vendor: "persona",
+  vendorReference: "inq_test_1001",
+  documentUrl: "https://app.withpersona.com/dashboard/inquiries/inq_test_1001",
   status: "pending_review",
   riskLevel: "medium",
   riskScore: 42,
@@ -46,30 +47,43 @@ const pendingPayload: KycVerificationPayload = {
   document: { type: "passport", issuingCountry: "GB", maskedNumber: "•••••4821", expiresOn: "2031-01-01" },
   checks: [{ type: "watchlist", result: "needs_review", detail: "Partial name match", completedAt: "2026-10-30T10:00:00.000Z" }],
   decisions: [],
+  assignedTo: null,
+  notes: "",
   submittedAt: "2026-10-30T09:00:00.000Z",
   updatedAt: "2026-10-30T10:00:00.000Z",
 };
 
-const approvedPayload = (decision: KycManualDecisionInput): KycVerificationPayload => ({
+const approvedPayload = (decision: KycManualDecisionInput): KycVerification => ({
   ...pendingPayload,
   status: "approved",
   decisions: [{ ...decision, decidedAt: "2026-11-01T12:00:00.000Z" }],
   updatedAt: "2026-11-01T12:00:00.000Z",
 });
 
+/** What the BFF sends for `pendingPayload`: the client row, not the backend record. */
+const pendingRow: KycReviewRow = {
+  id: APPLICANT_ID,
+  status: "PENDING",
+  applicantName: "Ada Lovelace",
+  documentUrl: "https://app.withpersona.com/dashboard/inquiries/inq_test_1001",
+  riskScore: 42,
+  assignedTo: "Unassigned",
+  notes: "",
+};
+
 const app = createApp({ allowedOrigins: ["http://localhost:3000"], logger: { debug() {}, info() {}, warn() {}, error() {} } });
 
 const expectDriverUntouched = () => {
-  expect(kycDriver.listVerificationPayloads).not.toHaveBeenCalled();
-  expect(kycDriver.getVerificationPayload).not.toHaveBeenCalled();
+  expect(kycDriver.listVerifications).not.toHaveBeenCalled();
+  expect(kycDriver.getVerification).not.toHaveBeenCalled();
   expect(kycDriver.submitManualDecision).not.toHaveBeenCalled();
 };
 
 const errorOf = (body: unknown): ApiErrorBody["error"] => (body as ApiErrorBody).error;
 
 beforeEach(() => {
-  kycDriver.listVerificationPayloads.mockResolvedValue([pendingPayload]);
-  kycDriver.getVerificationPayload.mockResolvedValue(pendingPayload);
+  kycDriver.listVerifications.mockResolvedValue([pendingPayload]);
+  kycDriver.getVerification.mockResolvedValue(pendingPayload);
   kycDriver.submitManualDecision.mockImplementation(async (_id, decision) => approvedPayload(decision));
   vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 });
@@ -117,8 +131,8 @@ describe("RBAC route guard", () => {
     const res = await request(app).get("/api/kyc/verifications").set(ROLE_HEADER, role);
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual([pendingPayload]);
-    expect(kycDriver.listVerificationPayloads).toHaveBeenCalledOnce();
+    expect(res.body).toEqual({ rows: [pendingRow] } satisfies KycReviewQueueResponse);
+    expect(kycDriver.listVerifications).toHaveBeenCalledOnce();
   });
 });
 
@@ -173,6 +187,6 @@ describe("Zod validation on POST /api/kyc/verifications/:applicantId/decisions",
       reason: "Documents verified",
       reviewerId: "mock-compliance_analyst",
     });
-    expect((res.body as KycVerificationPayload).status).toBe("approved");
+    expect(res.body).toEqual({ ...pendingRow, status: "APPROVED" } satisfies KycReviewRow);
   });
 });

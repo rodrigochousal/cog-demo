@@ -5,9 +5,12 @@ import type {
   KycManualDecision,
   KycRiskLevel,
   KycVendor,
-  KycVerificationPayload,
+  KycVerification,
   KycVerificationStatus,
-} from "@platform/shared-types";
+} from "../../domain/index.js";
+
+/** A generic verification before a vendor adapter derives its vendor-specific `documentUrl`. */
+export type KycVerificationSeed = Omit<KycVerification, "documentUrl">;
 
 interface Row {
   id: string;
@@ -57,9 +60,15 @@ function addMinutes(iso: string, minutes: number): string {
   return new Date(Date.parse(iso) + minutes * 60_000).toISOString();
 }
 
-/** 16 verifications across both vendors, all statuses and risk levels. */
-export function seedKycVerifications(): KycVerificationPayload[] {
-  return ROWS.map((row) => {
+/** Analysts that open (undecided) reviews rotate through; every third one is unassigned. */
+const ANALYSTS = ["cmp.mfarah", "cmp.adiaz", null] as const;
+
+/**
+ * 16 verifications across both vendors, all statuses and risk levels, in the platform's
+ * generic shape. Each vendor mock seeds its own file from these.
+ */
+export function seedKycVerifications(): KycVerificationSeed[] {
+  return ROWS.map((row, index) => {
     const [firstName, lastName, dateOfBirth, email, phone, nationality] = row.person;
     const [line1, city, region, postalCode, country] = row.address;
     const [type, issuingCountry, last4, expiresOn] = row.doc;
@@ -75,8 +84,8 @@ export function seedKycVerifications(): KycVerificationPayload[] {
     const decisions = row.decisions ?? [];
     return {
       applicantId: row.id,
-      vendorReference: row.ref,
       vendor: row.vendor,
+      vendorReference: row.ref,
       status: row.status,
       riskLevel: row.risk[0],
       riskScore: row.risk[1],
@@ -84,6 +93,8 @@ export function seedKycVerifications(): KycVerificationPayload[] {
       document: { type, issuingCountry, maskedNumber: `•••••${last4}`, expiresOn },
       checks,
       decisions,
+      assignedTo: decisions.at(-1)?.reviewerId ?? ANALYSTS[index % ANALYSTS.length] ?? null,
+      notes: row.flag ?? "",
       submittedAt: row.submittedAt,
       updatedAt: decisions.at(-1)?.decidedAt ?? addMinutes(row.submittedAt, CHECK_TYPES.length),
     };

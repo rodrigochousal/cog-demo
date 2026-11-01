@@ -1,4 +1,4 @@
-import type { CustomerTier, FeatureFlag, FlagEnvironment } from "@platform/shared-types";
+import type { CustomerTier, FeatureFlag, FeatureFlagProvider, FlagEnvironment } from "../../domain/index.js";
 
 type Row = [
   key: string,
@@ -34,10 +34,18 @@ const ROWS: Row[] = [
   ["rate-limit-adaptive", "Adaptive API rate limiting", "Scale per-key rate limits by historical traffic and plan tier.", false, ["free", "starter"], 15, "development", "developer-platform", ["api", "reliability"], ["2026-10-19T08:20:00.000Z", "2026-10-29T09:50:00.000Z"]],
 ];
 
-/** 18 flags across environments, tiers and rollout stages. */
+/** Flags alternate between providers (mid-migration from Unleash to LaunchDarkly). */
+const PROVIDERS: readonly FeatureFlagProvider[] = ["launchdarkly", "unleash"];
+const ENGINEERS = ["eng.akumar", "eng.jsmith", "eng.lnguyen", "eng.ptorres"] as const;
+
+/**
+ * 18 flags across environments, tiers, rollout stages and both providers, in the platform's
+ * generic shape. Each provider mock seeds its own file from these.
+ */
 export function seedFeatureFlags(): FeatureFlag[] {
-  return ROWS.map(([key, name, description, enabled, targetTiers, rolloutPercentage, environment, ownerTeam, tags, [createdAt, updatedAt]]) => ({
+  return ROWS.map(([key, name, description, enabled, targetTiers, rolloutPercentage, environment, ownerTeam, tags, [createdAt, updatedAt]], index) => ({
     key,
+    provider: PROVIDERS[index % PROVIDERS.length] ?? "launchdarkly",
     name,
     description,
     enabled,
@@ -48,5 +56,6 @@ export function seedFeatureFlags(): FeatureFlag[] {
     tags,
     createdAt,
     updatedAt,
+    updatedBy: ENGINEERS[index % ENGINEERS.length] ?? "eng.akumar",
   }));
 }

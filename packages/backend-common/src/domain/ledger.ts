@@ -1,4 +1,5 @@
-import type { ISODateString, Money } from "../common.js";
+import type { ISODateString } from "@platform/shared-types";
+import type { Money } from "./common.js";
 
 export const REFUND_STATUSES = ["pending_review", "approved", "processing", "completed", "rejected", "failed"] as const;
 export type RefundStatus = (typeof REFUND_STATUSES)[number];
@@ -16,9 +17,17 @@ export type RefundReason = (typeof REFUND_REASONS)[number];
 export const PAYMENT_RAILS = ["card", "ach", "wire", "rtp"] as const;
 export type PaymentRail = (typeof PAYMENT_RAILS)[number];
 
-/** A refund held in the finance ledger database. Money is always in minor units. */
-export interface RefundRecord {
+/** Payment processors refunds are settled through. A refund always goes back through the processor of its original charge. */
+export const PAYMENT_PROCESSORS = ["stripe", "paypal"] as const;
+export type PaymentProcessor = (typeof PAYMENT_PROCESSORS)[number];
+
+/** The platform's processor-agnostic refund. Money is always in minor units. */
+export interface Refund {
+  /** Platform id, e.g. `rf_8f2c41a9d0b1`. */
   id: string;
+  processor: PaymentProcessor;
+  /** The processor's own id for the refund (Stripe `re_…`, PayPal 17-char id). */
+  processorReference: string;
   /** The settled transaction being (partially) reversed. */
   transactionId: string;
   customerId: string;
@@ -38,13 +47,15 @@ export interface RefundRecord {
   riskScore: number;
   requestedBy: string;
   reviewedBy: string | null;
+  /** Handles of the approvers who signed off, in order; distinct. */
+  approvals: string[];
   notes: string;
   createdAt: ISODateString;
   updatedAt: ISODateString;
 }
 
-/** Fields the database assigns itself (`id`, timestamps) are excluded. */
-export type CreateRefundInput = Omit<RefundRecord, "id" | "createdAt" | "updatedAt">;
+/** Fields the ledger assigns itself (`id`, `processorReference`, timestamps) are excluded. */
+export type CreateRefundInput = Omit<Refund, "id" | "processorReference" | "createdAt" | "updatedAt">;
 
-/** Partial update; `id` and `createdAt` are immutable and `updatedAt` is set by the database. */
-export type UpdateRefundInput = Partial<CreateRefundInput>;
+/** Partial update; `processor` is immutable and `updatedAt` is set by the ledger. */
+export type UpdateRefundInput = Partial<Omit<CreateRefundInput, "processor">>;

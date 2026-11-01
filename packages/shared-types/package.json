@@ -2,7 +2,7 @@
   "name": "@platform/shared-types",
   "version": "0.1.0",
   "private": true,
-  "description": "Pure, zero-dependency TypeScript schemas and DTOs shared by every app and service.",
+  "description": "Client-facing contracts shared by every app and service: Zod row schemas (the single source of truth for their inferred types) and DTOs. No backend domain or vendor types. Its only dependency is zod.",
   "type": "module",
   "sideEffects": false,
   "exports": {
@@ -17,5 +17,8 @@
     "dev": "tsc -p tsconfig.json --watch --preserveWatchOutput",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\""
+  },
+  "dependencies": {
+    "zod": "^4.6.7"
   }
 }

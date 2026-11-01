@@ -1,5 +1,7 @@
-import { createAccessCheckRouter, type IFeatureFlagProvider } from "@platform/backend-common";
+import { createAccessCheckRouter, requirePermission, type IFeatureFlagProvider } from "@platform/backend-common";
+import type { FeatureFlagsResponse } from "@platform/shared-types";
 import { Router } from "express";
+import { toFeatureFlagRow } from "../presenters/feature-flag-row.js";
 
 /** Connectors this surface may use, resolved by the backend-common hub. */
 export interface ApiDependencies {
@@ -17,5 +19,9 @@ export interface ApiDependencies {
 export function createApiRouter(deps: ApiDependencies): Router {
   const router = Router();
   router.use("/access", createAccessCheckRouter("engineering"));
+  router.get("/feature-flags", requirePermission("engineering", "read"), async (_req, res) => {
+    const body: FeatureFlagsResponse = { rows: (await deps.featureFlags.getFlags()).map(toFeatureFlagRow) };
+    res.json(body);
+  });
   return router;
 }
