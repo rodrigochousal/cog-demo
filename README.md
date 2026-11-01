@@ -63,7 +63,7 @@ scripts/
 
 ```text
  apps/compliance ──HTTP──▶ services/compliance ─┐
- apps/finance    ──HTTP──▶ services/finance    ─┼──▶ packages/backend-common ──▶ .data/*.json
+ apps/finance    ──HTTP──▶ services/finance    ─┼──▶ packages/backend-common ──▶ data/*.json, .data/*.json
  apps/engineering──HTTP──▶ services/engineering─┘
         │                         │                          │
         └──────────────── packages/shared-types ─────────────┘
@@ -119,14 +119,35 @@ holds one JSON document and supports all-or-nothing `transact()` updates.
 - `transact()` callbacks must be synchronous. If a callback returns a Promise, the call throws and nothing is committed. Do any async work (HTTP, provider calls) before or after the transaction.
 - A lock is treated as stale only when the process that owns it has died. A transaction that finds it no longer owns its lock aborts instead of overwriting someone else's commit.
 
-There are two starter stores, and both start empty:
+To add a new generic store, call `openStore(name, seed)`. Run `pnpm data:reset` to delete all local data.
 
-| Store              | API                    | File                  | Stands in for                    |
-| ------------------ | ---------------------- | --------------------- | -------------------------------- |
-| Transactional ledger | `openLedgerStore()`  | `.data/ledger.json`   | A ledger database (append-only `LedgerEntry[]`) |
-| Mock KYC provider  | `openKycMockStore()`   | `.data/kyc-mock.json` | A third-party KYC provider's database |
+## Service & database connectors
 
-To add a new store, call `openStore(name, seed)`. Run `pnpm data:reset` to delete all local data.
+In production each BFF would talk to a PostgreSQL cluster or a SaaS vendor API. Locally, those
+dependencies are replaced by **connectors**: interfaces in `backend-common/src/connectors`, backed by
+async (`fs/promises`) JSON-file drivers, so everything works with zero credentials.
+
+| Connector interface    | Hub factory                | Used by                | Data file (`packages/backend-common/data/`) | Stands in for |
+| ---------------------- | -------------------------- | ---------------------- | ------------------------------------------- | ------------- |
+| `ILedgerDatabase`      | `getLedgerDatabase()`      | `services/finance`     | `ledger.json` (refunds)                     | Finance PostgreSQL cluster |
+| `IKycVendorClient`     | `getKycVendorClient()`     | `services/compliance`  | `kyc-vendor.json` (verification payloads)   | Persona / Alloy REST APIs |
+| `IFeatureFlagProvider` | `getFeatureFlagProvider()` | `services/engineering` | `feature-flags.json`                        | LaunchDarkly / Unleash |
+
+- **Hub only.** Services resolve connectors through the hub factories and pass them to their routers as
+  `ApiDependencies`. The `Disk*` drivers are not exported, and `pnpm lint:boundaries` rejects `fs` imports
+  in `services/*/src`, so handlers never see file paths or the storage driver.
+- **Seeding.** If a data file is missing (first boot, or after `pnpm data:reset`), the driver creates the
+  directory and seeds it with realistic mock data (15+ records per file). Services call
+  `initializeConnectors([...])` at boot so seeding happens before the first request.
+- **Simulated latency.** Every read and write waits a pseudo-random 50–150 ms
+  (`PLATFORM_SIMULATED_LATENCY_MS`, e.g. `80`, `20-60` or `off`) so frontends show their loading states.
+- **Errors.** Unknown ids → `NOT_FOUND` (404); blank ids or invalid input → `BUSINESS_RULE_VIOLATION`
+  (422); deciding an already-finalised KYC applicant → `CONFLICT` (409). All use the shared error envelope.
+  Unreadable or corrupt data files raise `ConnectorError`, which is logged and returned as a 500.
+- **Safety.** Writes are atomic (temp file + rename) and serialised in-process and across processes via
+  a lock file. Records read from disk are validated against a runtime schema.
+- **Tests.** Call `configureConnectors({ dataDir, latency: false })` before resolving connectors, or pass
+  fakes to a service's `createApp({ dependencies })`.
 
 ## Security posture
 
@@ -216,7 +237,7 @@ calls its BFF's `/health` endpoint to confirm the app → BFF wiring works.
 | `pnpm test`            | Runs Vitest suites (`backend-common` and each service)  |
 | `pnpm lint:boundaries` | Checks the architecture boundary rules                  |
 | `pnpm check`           | Runs boundaries, typecheck, test, and build together. Use it before opening a PR |
-| `pnpm data:reset`      | Deletes `.data/`                                        |
+| `pnpm data:reset`      | Deletes `.data/` and `packages/backend-common/data/`    |
 | `pnpm clean`           | Removes build output and `node_modules`                 |
 
 ### Environment variables
@@ -230,7 +251,9 @@ Each app and service has a `.env.example`. The defaults work without any `.env` 
 | `HOST`                | services  | `127.0.0.1`                 | Bind address (loopback only by default) |
 | `APP_ORIGINS`         | services  | `http://localhost:300x`     | CORS allow-list (the paired app only)   |
 | `PLATFORM_STORAGE`    | services  | `file`                      | Set to `file` or `memory`               |
-| `PLATFORM_DATA_DIR`   | services  | `<repo>/.data`              | Location of the JSON stores             |
+| `PLATFORM_DATA_DIR`   | services  | `<repo>/.data`              | Location of the generic JSON stores     |
+| `PLATFORM_CONNECTOR_DATA_DIR` | services | `packages/backend-common/data` | Location of the connector JSON files |
+| `PLATFORM_SIMULATED_LATENCY_MS` | services | `50-150` | Simulated connector latency (`off` disables) |
 
 ## Anatomy of a surface
 

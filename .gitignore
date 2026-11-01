@@ -14,3 +14,4 @@ pnpm-debug.log*
 
 # Local file-based ledgers / mock databases (seeded on first boot)
 .data/
+packages/backend-common/data/
