@@ -9,13 +9,6 @@ const withDetails = (code: string, message: string, details: unknown): AuditFail
   return safe === undefined ? { code, message } : { code, message, details: safe };
 };
 
-const toCode = (text: string) =>
-  text
-    .trim()
-    .replace(/[^a-z0-9]+/gi, "_")
-    .replace(/^_|_$/g, "")
-    .toUpperCase() || "FAILED";
-
 /** Normalises a thrown value (HttpError, DomainError, zod-style error, Error, ...) into an audit failure. */
 export function toAuditFailure(error: unknown): AuditFailure {
   if (error instanceof HttpError || error instanceof DomainError) {
@@ -30,21 +23,14 @@ export function toAuditFailure(error: unknown): AuditFailure {
 }
 
 /**
- * Derives an audit failure from an error response body. Understands the shared
- * `{ error: { code, message, details } }` envelope and the RBAC `{ error, reason }` body,
- * falling back to the HTTP status.
+ * Derives an audit failure from an error response body in the shared
+ * `{ error: { code, message, details } }` envelope, falling back to the HTTP status.
  */
 export function failureFromResponse(status: number, body: unknown): AuditFailure {
   const fallbackMessage = STATUS_CODES[status] ?? "Request failed";
-  if (isRecord(body)) {
-    const { error } = body;
-    if (isRecord(error) && typeof error.code === "string") {
-      const message = typeof error.message === "string" ? error.message : fallbackMessage;
-      return withDetails(error.code, message, error.details);
-    }
-    if (typeof error === "string") {
-      return { code: toCode(error), message: typeof body.reason === "string" ? body.reason : error };
-    }
+  if (isRecord(body) && isRecord(body.error) && typeof body.error.code === "string") {
+    const { code, message, details } = body.error;
+    return withDetails(code, typeof message === "string" ? message : fallbackMessage, details);
   }
   return { code: `HTTP_${status}`, message: fallbackMessage };
 }

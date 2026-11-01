@@ -13,6 +13,7 @@ import {
   injectMockUser,
   MOCK_USER_ROLE_HEADER,
   parseOrThrow,
+  PERMISSION_DENIED_MESSAGE,
   requirePermission,
   useAudit,
   type AuditLogPayload,
@@ -206,7 +207,7 @@ describe("auditLogger via createServiceApp", () => {
     });
   });
 
-  it("RBAC denial: FAILED with the 403 reason, action still named", async () => {
+  it("RBAC denial: FAILED with the FORBIDDEN envelope, action still named", async () => {
     const line = collector.next();
     const res = await call("POST", "/api/v1/widgets", { role: "finance_analyst", body: JSON.stringify({ name: "x" }) });
     expect(res.status).toBe(403);
@@ -217,7 +218,7 @@ describe("auditLogger via createServiceApp", () => {
       endpoint: "/api/v1/widgets",
       status: "FAILED",
       httpStatus: 403,
-      error: { code: "UNAUTHORIZED", message: "User role does not possess required permissions for this action." },
+      error: { code: "FORBIDDEN", message: PERMISSION_DENIED_MESSAGE },
     });
   });
 
