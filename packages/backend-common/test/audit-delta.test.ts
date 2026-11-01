@@ -2,6 +2,43 @@ import { describe, expect, it } from "vitest";
 import { computeDelta, REDACTED, snapshotRecord } from "../src/index.js";
 
 describe("computeDelta", () => {
+  it("isolates exactly the changed keys of a modified record into a clean structural payload", () => {
+    const oldRefund = {
+      id: "rf_1",
+      status: "pending",
+      amount: { value: 1250, currency: "USD" },
+      customer: { id: "cus_9", tier: "gold", contact: { email: "a@example.com", phone: "+1 555 0100" } },
+      tags: ["priority"],
+      note: "awaiting approval",
+    };
+    const newRefund = {
+      ...oldRefund,
+      status: "executed",
+      amount: { value: 1250, currency: "EUR" },
+      customer: { ...oldRefund.customer, contact: { ...oldRefund.customer.contact, email: "b@example.com" } },
+      tags: ["priority", "audited"],
+      executedBy: "mock-finance_analyst",
+    };
+    delete (newRefund as Partial<typeof newRefund>).note;
+
+    expect(computeDelta(oldRefund, newRefund)).toStrictEqual({
+      oldValue: {
+        status: "pending",
+        amount: { currency: "USD" },
+        customer: { contact: { email: "a@example.com" } },
+        tags: ["priority"],
+        note: "awaiting approval",
+      },
+      newValue: {
+        status: "executed",
+        amount: { currency: "EUR" },
+        customer: { contact: { email: "b@example.com" } },
+        tags: ["priority", "audited"],
+        executedBy: "mock-finance_analyst",
+      },
+    });
+  });
+
   it("create: oldValue null, newValue is the full record", () => {
     const record = { id: "r1", amount: 100, meta: { tags: ["a"] } };
     expect(computeDelta(null, record)).toEqual({ oldValue: null, newValue: record });

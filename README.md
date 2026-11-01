@@ -191,7 +191,7 @@ Each piece of data has three types, and each layer only sees its own:
 | Endpoint                      | Role needed            | Response (`dto/<team>.ts`) |
 | ----------------------------- | ---------------------- | -------------------------- |
 | `GET /api/refunds` (finance)  | `finance` · `read`     | `RefundTransactionsResponse { rows: RefundTransactionRow[] }` |
-| `GET /api/kyc-reviews` (compliance) | `compliance` · `read` | `KycReviewQueueResponse { rows: KycReviewRow[] }` |
+| `GET /api/kyc/verifications` (compliance) | `compliance` · `read` | `KycReviewQueueResponse { rows: KycReviewRow[] }` |
 | `GET /api/feature-flags` (engineering) | `engineering` · `read` | `FeatureFlagsResponse { rows: FeatureFlagRow[] }` |
 
 ## Strict runtime data contracts
@@ -314,10 +314,11 @@ calls its BFF's `/health` endpoint to confirm the app → BFF wiring works.
 | `pnpm dev`             | Runs every app and service in watch mode                |
 | `pnpm build`           | Builds all packages, services, and apps (Turborepo, dependency-ordered) |
 | `pnpm start`           | Runs the production builds                              |
+| `pnpm lint`            | Boundary rules, then typecheck of every workspace (Turborepo `lint` task) |
 | `pnpm typecheck`       | Runs `tsc --noEmit` across the workspace                |
 | `pnpm test`            | Runs Vitest suites (`backend-common` and each service)  |
 | `pnpm lint:boundaries` | Checks the architecture boundary rules                  |
-| `pnpm check`           | Runs boundaries, typecheck, test, and build together. Use it before opening a PR |
+| `pnpm check`           | Runs lint, test, and build together (what CI runs). Use it before opening a PR |
 | `pnpm data:reset`      | Deletes `packages/backend-common/data/` (or `PLATFORM_DATA_DIR`) |
 | `pnpm clean`           | Removes build output and `node_modules`                 |
 
@@ -334,6 +335,46 @@ Each app and service has a `.env.example`. The defaults work without any `.env` 
 | `PLATFORM_STORAGE`    | services  | `file`                      | `file` persists to disk; `memory` never touches disk |
 | `PLATFORM_DATA_DIR`   | services  | `packages/backend-common/data` | Location of the local JSON data files |
 | `PLATFORM_SIMULATED_LATENCY_MS` | services | `50-150` | Simulated connector latency (`off` disables) |
+
+## Testing and CI/CD
+
+Every check that CI runs also runs locally. `pnpm test` from the root runs every Vitest suite through Turborepo.
+
+### Test suites
+
+| Where | Kind | What it proves |
+| ----- | ---- | -------------- |
+| `packages/backend-common/test/permissions.test.ts` | Unit | The RBAC matrix, checked role by role against an independently written grant table. Each allowed `[resource, action]` pair must return `true`, and every other pair, including unknown and prototype keys, must return `false`. |
+| `packages/backend-common/test/audit-delta.test.ts` | Unit | `computeDelta` keeps only the changed keys, keeps nested structure, records added and removed keys, redacts secrets, and never mutates its inputs. |
+| `packages/backend-common/test/*.test.ts` (rest) | Unit / in-process HTTP | `JsonCollection` locking and rollback, connectors, `createServiceApp`, identity middleware, and the audit middleware. |
+| `services/compliance/test/kyc.integration.test.ts` | API contract (Supertest) | The Compliance BFF over HTTP. The disk-backed KYC driver is replaced with `vi.fn()` spies through `vi.mock("@platform/backend-common")`, so no file is touched. Guard failures and validation failures must leave every driver spy uncalled. |
+| `services/*/test/app.test.ts` | Smoke | Health, the 404 envelope, the RBAC probe wiring, and each BFF's row endpoint (rows parse against their contract and carry no backend or vendor fields). |
+
+The contract tests cover these cases:
+
+- **403 from the route guard.** `finance_analyst` and `engineer` get `403 FORBIDDEN` on `GET /api/kyc/verifications` and on `POST /api/kyc/verifications/:applicantId/decisions`. A read with no `x-authenticated-user-role` header falls back to `finance_analyst` and is also rejected with 403. A *mutation* with no header is rejected earlier with `400 BAD_REQUEST`, by design, because cross-site form POSTs can't set custom headers (see [Access control](#access-control-rbac)).
+- **400 from Zod validation.** A missing or unknown `outcome`, a blank or non-string `reason`, unknown keys (including a client-supplied `reviewerId`), a non-object body, a missing body, or malformed JSON all stop with `400` before the connector is called. Schema failures return `VALIDATION_FAILED` and the Zod issues in `error.details`. Schemas live next to their routes (`services/compliance/src/routes/schemas.ts`) and are applied with `parseOrThrow`.
+
+### Turborepo task graph
+
+```
+lint      -> //#lint:boundaries + typecheck   (typecheck -> ^build)
+build     -> ^build                           (outputs dist/**, .next/**)
+test      -> ^build                           (suites import workspace deps from dist)
+```
+
+`^build` means "build this workspace's dependencies first". For example, `pnpm test` builds `shared-types`, then `backend-common`, and only then runs the service suites. Results are cached, so an unchanged workspace is replayed from `.turbo/cache`.
+
+### GitHub Actions pipeline
+
+`.github/workflows/ci.yml` runs on every pull request, on pushes to `main`, and on manual dispatch:
+
+1. Check out the full history, set up pnpm (the version comes from `packageManager`), and set up Node from `.nvmrc`. The pnpm store is cached and keyed on `pnpm-lock.yaml`.
+2. Restore `.turbo/cache`, then run `pnpm install --frozen-lockfile`.
+3. `pnpm lint` checks boundaries and typechecks every workspace.
+4. `pnpm build` and `pnpm test` run with `--affected` on pull requests, so only workspaces changed against the base branch, and the workspaces that depend on them, are built and tested. Pushes to `main` verify the whole graph.
+
+CI runs with `PLATFORM_SIMULATED_LATENCY_MS=off`. The connector suites write to their own temp directories, never to `packages/backend-common/data/`. A newer run on the same PR cancels the older one.
 
 ## Anatomy of a surface
 

@@ -38,7 +38,7 @@ it("sets the caller identity on /api and guards the access probes", async () => 
 });
 
 it("serves client rows mapped from every vendor, validated against the row contract", async () => {
-  const res = await fetch(`${base}/api/kyc-reviews`, { headers: { "x-authenticated-user-role": "compliance_analyst" } });
+  const res = await fetch(`${base}/api/kyc/verifications`, { headers: { "x-authenticated-user-role": "compliance_analyst" } });
   expect(res.status).toBe(200);
   const { rows } = (await res.json()) as KycReviewQueueResponse;
   expect(rows).toHaveLength(16);
@@ -49,7 +49,7 @@ it("serves client rows mapped from every vendor, validated against the row contr
   expect(rows.find((r) => r.id === "app_01HZK429G3")).toEqual({ id: "app_01HZK429G3", status: "PENDING", applicantName: "Rafael Gómez", documentUrl: "https://app.alloy.co/evaluations/ev_A3s7DfG9hJ2k", riskScore: 63, assignedTo: "cmp.mfarah", notes: "Shares surname and birth year with a listed PEP (regional official)." });
 });
 
-it("guards /api/kyc-reviews with the read permission", async () => {
-  const res = await fetch(`${base}/api/kyc-reviews`, { headers: { "x-authenticated-user-role": "finance_analyst" } });
+it("guards /api/kyc/verifications with the read permission", async () => {
+  const res = await fetch(`${base}/api/kyc/verifications`, { headers: { "x-authenticated-user-role": "finance_analyst" } });
   expect(res.status).toBe(403);
 });
