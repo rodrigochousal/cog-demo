@@ -1,0 +1,17 @@
+# Change zones (see README → "Blast radius by design").
+# Red zone: platform-owned guardrails and the gates that enforce them.
+# Replace @rodrigochousal with the platform team (e.g. @org/platform) when one exists.
+# Enforced only once branch protection on `main` requires code-owner review.
+
+/packages/backend-common/  @rodrigochousal
+/scripts/                  @rodrigochousal
+/.github/                  @rodrigochousal
+/turbo.json                @rodrigochousal
+/package.json              @rodrigochousal
+/pnpm-workspace.yaml       @rodrigochousal
+/pnpm-lock.yaml            @rodrigochousal
+/tsconfig.base.json        @rodrigochousal
+/AGENTS.md                 @rodrigochousal
+
+# Amber zone: contracts every surface depends on.
+/packages/shared-types/    @rodrigochousal

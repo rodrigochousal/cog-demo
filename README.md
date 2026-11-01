@@ -40,6 +40,46 @@ This platform replaces the enterprise guardrails that low-code ecosystems such a
 - **Framework:** one compact, unified dashboard interface, optimized for high-throughput data processing across internal teams.
 - **Local implementation:** `shadcn/ui` components give clean Tailwind styling, and you own all of the markup. They are paired with the headless logic engine of `TanStack Table (v9)`, which handles generic datasets, client- and server-side pagination, and advanced row filtering.
 
+## Blast radius by design
+
+The layers above aren't only features. They are arranged so that most internal-app work can be handed to product managers and AI agents (e.g. Devin) without spending core engineering time. Team surfaces are isolated from each other, and authentication, audit logging, data contracts and storage live in a closed shared package that feature code consumes but cannot change or bypass. An AI-driven feature change is then confined to one team's surface. It cannot weaken the guardrails without a platform-team review.
+
+> This is a demo. Some controls below are **enforced** by code or CI today; others are **documented only** and describe how the pattern would be productized. The table says which is which.
+
+### Change zones
+
+| Zone | Paths | Who changes it |
+| ---- | ----- | -------------- |
+| **Green: self-serve** | `apps/<team>/`, `services/<team>/src/routes/` (plus `policy/`, `presenters/`), `services/<team>/test/` | PMs and agents, for one team at a time. A change here can only affect that team's screen and BFF. |
+| **Amber: review required** | `packages/shared-types/` | Anyone, but each change is reviewed: a contract change reaches every surface that uses it. |
+| **Red: platform team** | `packages/backend-common/`, `scripts/`, `.github/`, `turbo.json`, root `package.json`, `pnpm-*.yaml`, `tsconfig.base.json`, `AGENTS.md` | The platform team only. These hold the guardrails *and* the gates that enforce them. |
+
+[`.github/CODEOWNERS`](.github/CODEOWNERS) maps these zones to owners, and [`AGENTS.md`](AGENTS.md) tells coding agents to stay in the green zone and escalate instead of editing red-zone code.
+
+### What is enforced vs. documented
+
+| Control | Status | How |
+| ------- | ------ | --- |
+| Apps reach only their own BFF, and only through `api-client.ts` | Enforced | `scripts/check-boundaries.mjs` (`pnpm lint`, run in CI) |
+| Services can't import other services, apps, `fs`, or DB/cloud SDKs | Enforced | Boundary check |
+| `backend-common` can't import services or apps; vendor shapes stay inside their connector | Enforced | Boundary check |
+| Services see only `backend-common`'s public API | Enforced | `exports` exposes only `dist/index.js`, and the boundary check blocks relative imports across packages |
+| Every service gets CORS, audit, identity, logging and the error envelope | Enforced | `createServiceApp` sets them up centrally; services don't add middleware by hand |
+| Malformed input never reaches a connector | Enforced per route | Zod schemas with `parseOrThrow` / `validateBody`, covered by contract tests |
+| Every PR is linted, built and tested | Enforced | `.github/workflows/ci.yml` |
+| Red-zone changes need platform review | Documented | `CODEOWNERS` exists. It blocks merges only once branch protection on `main` requires code-owner review and the CI check (a GitHub setting, not in the repo). |
+| Every mutating `/api` route has a permission guard and a schema | Documented | Today it's a convention. To productize: register routes through a `defineRoute({ method, path, permission, body })` helper, so a missing guard is a type error, plus a test that walks each router and fails on an unguarded mutating route. |
+| Services can't turn off audit or identity | Documented | `createServiceApp` still accepts `audit: false` / `identity: false`. To productize: have the boundary check reject them under `services/*`. |
+| Mock identity and local adapters never run in production | Documented | To productize: `createServiceApp` and `initializeConnectors` refuse to start with the mock identity or disk/memory adapters when `NODE_ENV=production`. |
+
+### Sharing the platform with production services
+
+Much of `packages/backend-common` isn't specific to internal apps. The service bootstrap, error envelope, RBAC guards, audit delta engine, Zod validation helpers and connector *interfaces* could be reused by the production services engineering already maintains. The productized path:
+
+1. **Split the package.** A domain-agnostic `platform-kernel` (HTTP bootstrap, auth, audit, validation) would be versioned and consumable outside this monorepo. A separate `connectors` package would hold the interfaces (`ILedgerDatabase`, `IKycVendorClient`, `IFeatureFlagProvider`) and the local adapters.
+2. **Swap implementations, not call sites.** Production would provide a real identity middleware through `createServiceApp({ identity })`, a log shipper in place of stdout, and Postgres or vendor-API adapters behind the same connector interfaces. Routes and screens would not change.
+3. **Keep the zones.** The kernel would stay platform-owned, so internal-app work and production services would get the same guardrails from one reviewed source.
+
 ## Layout
 
 ```text
