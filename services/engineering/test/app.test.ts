@@ -2,7 +2,7 @@ import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { configureConnectors, resetConnectors } from "@platform/backend-common";
 import { featureFlagRowSchema, type HealthResponse, type FeatureFlagsResponse } from "@platform/shared-types";
-import { afterAll, beforeAll, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "../src/app.js";
 
 let server: Server;
@@ -52,4 +52,29 @@ it("serves client rows mapped from every provider, validated against the row con
 it("guards /api/feature-flags with the read permission", async () => {
   const res = await fetch(`${base}/api/feature-flags`, { headers: { "x-authenticated-user-role": "compliance_analyst" } });
   expect(res.status).toBe(403);
+});
+
+describe("POST /api/feature-flags/:flagId/toggle", () => {
+  const toggle = (id: string, role: string, body: unknown) =>
+    fetch(`${base}/api/feature-flags/${id}/toggle`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-authenticated-user-role": role },
+      body: JSON.stringify(body),
+    });
+
+  it("flips the flag and records the caller as the last editor", async () => {
+    const res = await toggle("chargeback-evidence-ai", "engineer", { enabled: true });
+    expect(res.status).toBe(200);
+    expect(featureFlagRowSchema.parse(await res.json())).toMatchObject({ id: "chargeback-evidence-ai", enabled: true, updatedBy: "mock-engineer" });
+
+    const list = (await (await fetch(`${base}/api/feature-flags`, { headers: { "x-authenticated-user-role": "engineer" } })).json()) as FeatureFlagsResponse;
+    expect(list.rows.find((r) => r.id === "chargeback-evidence-ai")?.enabled).toBe(true);
+  });
+
+  it("validates the body, guards with the toggle permission and 404s unknown flags", async () => {
+    expect((await toggle("webhooks-v2", "engineer", { enabled: "yes" })).status).toBe(400);
+    expect((await toggle("webhooks-v2", "engineer", {})).status).toBe(400);
+    expect((await toggle("webhooks-v2", "compliance_analyst", { enabled: false })).status).toBe(403);
+    expect((await toggle("no-such-flag", "engineer", { enabled: false })).status).toBe(404);
+  });
 });

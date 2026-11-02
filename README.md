@@ -6,7 +6,7 @@ hosted databases, or third-party infrastructure.
 
 | Layer    | Stack                                                                    |
 | -------- | ------------------------------------------------------------------------ |
-| Frontend | Next.js (App Router), TypeScript, Tailwind CSS v4, shadcn/ui, TanStack Table |
+| Frontend | Next.js (Pages Router), TypeScript, Tailwind CSS v4, shadcn/ui, TanStack Query v5, TanStack Table v9 (`packages/ui-shared`) |
 | Backend  | Node.js, Express 5, TypeScript                                           |
 | Storage  | Local JSON files or in-memory collections (`packages/backend-common`)    |
 | Tooling  | pnpm workspaces, Turborepo, Vitest                                       |
@@ -94,6 +94,7 @@ services/                 BFFs (one per app; each app's only backend)
 packages/
   backend-common/         Closed backend module shared by every service
   shared-types/           Zod client-row contracts + inferred types and DTOs (only dependency: zod)
+  ui-shared/              Shared frontend: design system, schema-validating apiClient, Query root, <CoreDataTable />
 scripts/
   check-boundaries.mjs    Enforces the import rules below (`pnpm lint:boundaries`)
   reset-data.mjs          Wipes local data (`pnpm data:reset`)
@@ -120,8 +121,9 @@ These rules are architectural. `pnpm lint:boundaries` enforces them, and `pnpm c
 
 1. **`apps/*`: UI only.**
    - Apps contain no database logic and make no direct third-party calls.
-   - An app talks only to its own BFF, over HTTP/fetch, through `src/lib/api-client.ts`. This is the only file allowed to call `fetch`. The BFF URL comes from `NEXT_PUBLIC_BFF_URL`.
-   - Apps may import `@platform/shared-types`. They may not import `backend-common`, any service, Node built-ins, or DB/cloud SDKs.
+   - An app talks only to its own BFF, over HTTP, through the `apiClient` it builds in `src/common/api-client.ts` with ui-shared's `createApiClient`. Every response is parsed against its `@platform/shared-types` Zod schema (`apiClient.getParsed(url, schema)`); a mismatch throws `SchemaMismatchError`. App source never calls `fetch` (`packages/ui-shared/src/api/api-client.ts` is the only caller). The BFF URL comes from `NEXT_PUBLIC_BFF_URL`.
+   - Apps may import `@platform/shared-types` and `ui-shared` (`"ui-shared": "workspace:*"`, required). They may not import `backend-common`, any service, Node built-ins, or DB/cloud SDKs.
+   - Server state is TanStack Query only: no `useEffect` in app source, and `useQuery`/`useMutation` live in `src/features/<feature>/api/`. Mutations invalidate their feature's query keys on success.
 2. **`services/*`: one BFF per app.**
    - A service receives requests from its paired app, runs that domain's business rules, and returns payloads shaped for that app's screens.
    - CORS only allows the paired app's origin (`APP_ORIGINS`).
@@ -142,13 +144,15 @@ These rules are architectural. `pnpm lint:boundaries` enforces them, and `pnpm c
 
 | You are adding…                                              | Put it in                                  |
 | ------------------------------------------------------------ | ------------------------------------------ |
-| A screen, component, or hook for one team                    | `apps/<team>/src/features/<feature>/`      |
+| A screen or component for one team                           | `apps/<team>/src/features/<feature>/`      |
+| A useQuery / useMutation hook for that screen                | `apps/<team>/src/features/<feature>/api/`  |
+| A UI pattern, primitive or hook needed by 2+ apps            | `packages/ui-shared/src/`                  |
 | An endpoint, a business rule, or response shaping for that screen | `services/<team>/src/routes/` (+ `policy/`, `presenters/` as it grows) |
 | A request/response type for that endpoint                    | `packages/shared-types/src/dto/<team>.ts`  |
 | A store, an integration mock, or a rule needed by 2+ services | `packages/backend-common/src/<module>/`    |
 | A generic (vendor-agnostic) domain type                      | `packages/backend-common/src/domain/`      |
 | A new vendor behind an existing connector                    | `packages/backend-common/src/connectors/<x>/vendors/<vendor>.ts` |
-| A shadcn/ui primitive                                        | `pnpm dlx shadcn@latest add <component>` inside the app |
+| A shadcn/ui primitive                                        | `pnpm dlx shadcn@latest add <component>` inside `packages/ui-shared` (rewrite `@/lib/utils` to `../../lib/utils`) |
 
 ## Local storage (no database)
 
@@ -270,7 +274,7 @@ the shared error envelope, with field-level issues in `details` (`ValidationErro
     "message": "Must be a 3-letter ISO-4217 currency code, e.g. USD" }] } } }
 ```
 
-Apps receive it as a `BffError` with code `VALIDATION_FAILED`, and the audit trail records it as a
+Apps receive it as an `ApiRequestError` with code `VALIDATION_FAILED`, and the audit trail records it as a
 `VALIDATION_FAILED` failure.
 
 ## Security posture
@@ -292,11 +296,11 @@ The matrix is declared once in `PERMISSIONS` (`auth/permissions.ts`).
 
 **Mock identity injection.** With no identity provider, `injectMockUser` reads the `x-authenticated-user-role` header and attaches the matching mock profile to `req.user`. If the header is missing on a GET/HEAD/OPTIONS request it uses `finance_analyst` and logs a warning to stdout (once per process). If it's missing on a mutating request (POST/PATCH/PUT/DELETE…) the request gets a 400. This matters because a browser can send a cross-site form POST without custom headers, so a default role there would let any web page trigger actions on a local BFF. An unknown role gets a 400. Any caller can claim any role, so this is for local development only.
 
-**Route guards.** `requirePermission(resource, action)` lets the request through only if `req.user.role` is allowed to do that action on that resource. Otherwise it passes `HttpError(403, "FORBIDDEN", …)` to the shared error handler, so the response uses the standard envelope: `403 { "error": { "code": "FORBIDDEN", "message": "User role does not possess required permissions for this action." } }`. It also denies requests when no identity middleware has run (fails closed). The apps' `api-client.ts` needs no special case; the denial surfaces as `BffError(403, "FORBIDDEN", message)`. Resource and action names are type-checked, so `requirePermission("finance", "toggle")` won't compile.
+**Route guards.** `requirePermission(resource, action)` lets the request through only if `req.user.role` is allowed to do that action on that resource. Otherwise it passes `HttpError(403, "FORBIDDEN", …)` to the shared error handler, so the response uses the standard envelope: `403 { "error": { "code": "FORBIDDEN", "message": "User role does not possess required permissions for this action." } }`. It also denies requests when no identity middleware has run (fails closed). The apps' API client needs no special case; the denial surfaces as `ApiRequestError(403, "FORBIDDEN", message)` and the feature's error panel shows it. Resource and action names are type-checked, so `requirePermission("finance", "toggle")` won't compile.
 
 **Where identity is mounted.** `createServiceApp` mounts identity on `/api` ahead of the service's routes, so each service only calls `app.use("/api", createApiRouter())`. `/health` and anything else outside `/api` never sees it. The `identity` option defaults to `injectMockUser`. Pass a different middleware to replace it (e.g. real auth later), or `false` to turn it off.
 
-Every service exposes placeholder probes from `createAccessCheckRouter(resource)`: `GET /api/access/read` and `POST /api/access/<approve|execute|toggle>`. Each app's top bar has a role dropdown. The choice is kept in a `mock-user-role` cookie, which is shared by all apps on localhost, and `api-client.ts` sends it as the header. The **Access check** card on each home page calls the probes so you can see which requests are allowed and which get Unauthorized.
+Every service exposes placeholder probes from `createAccessCheckRouter(resource)`: `GET /api/access/read` and `POST /api/access/<approve|execute|toggle>`. Each app's top bar has a role dropdown. The choice is kept in a `mock-user-role` cookie, which is shared by all apps on localhost, and ui-shared's `mockIdentityHeaders` sends it as the header. Switching roles resets every cached query, so each screen re-fetches as the new role (403s render inline). The probes remain for manual `curl` checks.
 
 ```ts
 import { createServiceApp, requirePermission } from "@platform/backend-common";
@@ -419,15 +423,21 @@ CI runs with `PLATFORM_SIMULATED_LATENCY_MS=off`. The connector suites write to 
 ## Anatomy of a surface
 
 ```text
-apps/<team>/src/
-  app/                    Next.js App Router routes (layout.tsx wraps the shared AppShell)
-  components/ui/          shadcn/ui primitives
-  components/data-table/  Generic TanStack Table (search, select filters, sorting, pagination)
-  components/layout/      AppShell, PageHeader, BffStatus
-  features/<feature>/     Screens for this surface (create as you build)
-  lib/api-client.ts       The only fetch: typed get/post/patch to the paired BFF + BffError
-  lib/use-bff-query.ts    Small client-side data hook
-  lib/surface.ts          Surface identity, BFF URL, links to sibling surfaces
+packages/ui-shared/src/   Shared frontend infrastructure (TypeScript source, transpiled by each app)
+  styles/globals.css      Tailwind v4 + shadcn tokens: compact density, light/dark variables (`ui-shared/styles.css`)
+  components/ui/          shadcn/ui primitives (radix-vega style; add more with `pnpm dlx shadcn add` here)
+  api/                    createApiClient → getParsed / postParsed (Zod-validated), ApiRequestError, SchemaMismatchError
+  query/                  QueryProvider (QueryClient defaults), runBatch for bulk mutations
+  data-table/             <CoreDataTable<TData, TValue> /> on TanStack Table v9: sorting, column + global
+                          filtering, pagination, row selection; createCoreColumnHelper, selectionColumn
+  shell/ theme/ identity/ AppShell, PageHeader, StatCard, BffHealthBadge, ReasonDialog, ThemeToggle, mock role
+
+apps/<team>/src/          (Pages Router; only these four layers are allowed)
+  app/                    Global wrappers: providers.tsx (QueryProvider, Toaster), app-frame.tsx, globals.css
+  pages/                  Thin routes: _app.tsx, _document.tsx (theme init), index.tsx mounts the feature
+  common/                 App-local shared code: api-client.ts (the paired BFF), surface.ts
+  features/<feature>/     Domain screens; api/ holds every useQuery/useMutation hook and query keys
+                          (compliance: kyc-queue, finance: refunds-panel, engineering: feature-flags)
 
 services/<team>/src/
   index.ts                Process entry point (port, graceful shutdown)
@@ -437,7 +447,7 @@ services/<team>/src/
 ```
 
 Every service returns errors in the same envelope, `{ "error": { "code", "message", "details?" } }`
-(`ApiErrorBody`). Apps receive these errors as `BffError`.
+(`ApiErrorBody`). Apps receive these errors as `ApiRequestError`.
 
 **Throw:**
 
