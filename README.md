@@ -11,7 +11,7 @@ hosted databases, or third-party infrastructure.
 | Storage  | Local JSON files or in-memory collections (`packages/backend-common`)    |
 | Tooling  | pnpm workspaces, Turborepo, Vitest                                       |
 
-## Platform guardrail layers
+## Platform features
 
 This platform replaces the enterprise guardrails that low-code ecosystems such as Microsoft Power Apps normally hide from you. It is made of five layers, each built as a decoupled, scalable module in this monorepo. Shared backend parts live in `packages/backend-common`, shared contracts in `packages/shared-types`, and UI parts in each `apps/*`.
 
