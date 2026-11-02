@@ -1,4 +1,4 @@
-# Change zones (see README → "Blast radius by design").
+# Change zones (see README → "Safe-by-design architecture").
 # Red zone: platform-owned guardrails and the gates that enforce them.
 # Replace @rodrigochousal with the platform team (e.g. @org/platform) when one exists.
 # Enforced only once branch protection on `main` requires code-owner review.
