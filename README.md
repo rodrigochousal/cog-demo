@@ -40,9 +40,11 @@ This platform replaces the enterprise features that low-code ecosystems such as 
 - **Framework:** one compact, unified dashboard interface, optimized for high-throughput data processing across internal teams.
 - **Local implementation:** `shadcn/ui` components give clean Tailwind styling, and you own all of the markup. They are paired with the headless logic engine of `TanStack Table (v9)`, which handles generic datasets, client- and server-side pagination, and advanced row filtering.
 
-## Blast radius by design
+## Safe-by-design architecture
 
-The features above aren't only capabilities. They are arranged so that most internal-app work can be handed to product managers and AI agents (e.g. Devin) without spending core engineering time. Team surfaces are isolated from each other, and authentication, audit logging, data contracts and storage live in a closed shared package that feature code consumes but cannot change or bypass. An AI-driven feature change is then confined to one team's surface. It cannot weaken the platform features without a platform-team review.
+The platform is designed to let product managers and AI coding agents (e.g. Devin) independently build and extend internal applications without compromising shared infrastructure.
+
+Application surfaces are isolated from one another, while security, auditing, data contracts, and storage are centralized in a protected shared package. Explicit architectural boundaries and repository ownership rules ensure feature-level changes cannot modify or bypass these shared capabilities. Changes to platform-level infrastructure require platform-team review.
 
 ### Change zones
 
