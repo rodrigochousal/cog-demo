@@ -1,6 +1,6 @@
 # Agent instructions
 
-This repo is built so an AI agent can ship features for one team without touching the platform guardrails. Read [README → Blast radius by design](README.md#blast-radius-by-design) first.
+This repo is built so an AI agent can ship features for one team without touching the platform features. Read [README → Blast radius by design](README.md#blast-radius-by-design) first.
 
 ## Change zones
 

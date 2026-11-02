@@ -13,7 +13,7 @@ hosted databases, or third-party infrastructure.
 
 ## Platform features
 
-This platform replaces the enterprise guardrails that low-code ecosystems such as Microsoft Power Apps normally hide from you. It is made of five layers, each built as a decoupled, scalable module in this monorepo. Shared backend parts live in `packages/backend-common`, shared contracts in `packages/shared-types`, and UI parts in each `apps/*`.
+This platform replaces the enterprise features that low-code ecosystems such as Microsoft Power Apps normally hide from you. It provides five features, each built as a decoupled, scalable module in this monorepo. Shared backend parts live in `packages/backend-common`, shared contracts in `packages/shared-types`, and UI parts in each `apps/*`.
 
 ### 1. Granular role-based access control (RBAC)
 
@@ -42,7 +42,7 @@ This platform replaces the enterprise guardrails that low-code ecosystems such a
 
 ## Blast radius by design
 
-The layers above aren't only features. They are arranged so that most internal-app work can be handed to product managers and AI agents (e.g. Devin) without spending core engineering time. Team surfaces are isolated from each other, and authentication, audit logging, data contracts and storage live in a closed shared package that feature code consumes but cannot change or bypass. An AI-driven feature change is then confined to one team's surface. It cannot weaken the guardrails without a platform-team review.
+The features above aren't only capabilities. They are arranged so that most internal-app work can be handed to product managers and AI agents (e.g. Devin) without spending core engineering time. Team surfaces are isolated from each other, and authentication, audit logging, data contracts and storage live in a closed shared package that feature code consumes but cannot change or bypass. An AI-driven feature change is then confined to one team's surface. It cannot weaken the platform features without a platform-team review.
 
 ### Change zones
 
@@ -50,7 +50,7 @@ The layers above aren't only features. They are arranged so that most internal-a
 | ---- | ----- | -------------- |
 | **Green: self-serve** | `apps/<team>/`, `services/<team>/src/routes/` (plus `policy/`, `presenters/`), `services/<team>/test/` | PMs and agents, for one team at a time. A change here can only affect that team's screen and BFF. |
 | **Amber: review required** | `packages/shared-types/` | Anyone, but each change is reviewed: a contract change reaches every surface that uses it. |
-| **Red: platform team** | `packages/backend-common/`, `scripts/`, `.github/`, `turbo.json`, root `package.json`, `pnpm-*.yaml`, `tsconfig.base.json`, `AGENTS.md` | The platform team only. These hold the guardrails *and* the gates that enforce them. |
+| **Red: platform team** | `packages/backend-common/`, `scripts/`, `.github/`, `turbo.json`, root `package.json`, `pnpm-*.yaml`, `tsconfig.base.json`, `AGENTS.md` | The platform team only. These hold the platform features *and* the gates that enforce them. |
 
 [`.github/CODEOWNERS`](.github/CODEOWNERS) maps these zones to owners, and [`AGENTS.md`](AGENTS.md) tells coding agents to stay in the green zone and escalate instead of editing red-zone code.
 
