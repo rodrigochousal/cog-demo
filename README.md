@@ -44,8 +44,6 @@ This platform replaces the enterprise guardrails that low-code ecosystems such a
 
 The layers above aren't only features. They are arranged so that most internal-app work can be handed to product managers and AI agents (e.g. Devin) without spending core engineering time. Team surfaces are isolated from each other, and authentication, audit logging, data contracts and storage live in a closed shared package that feature code consumes but cannot change or bypass. An AI-driven feature change is then confined to one team's surface. It cannot weaken the guardrails without a platform-team review.
 
-> This is a demo. Some controls below are **enforced** by code or CI today; others are **documented only** and describe how the pattern would be productized. The table says which is which.
-
 ### Change zones
 
 | Zone | Paths | Who changes it |
@@ -55,30 +53,6 @@ The layers above aren't only features. They are arranged so that most internal-a
 | **Red: platform team** | `packages/backend-common/`, `scripts/`, `.github/`, `turbo.json`, root `package.json`, `pnpm-*.yaml`, `tsconfig.base.json`, `AGENTS.md` | The platform team only. These hold the guardrails *and* the gates that enforce them. |
 
 [`.github/CODEOWNERS`](.github/CODEOWNERS) maps these zones to owners, and [`AGENTS.md`](AGENTS.md) tells coding agents to stay in the green zone and escalate instead of editing red-zone code.
-
-### What is enforced vs. documented
-
-| Control | Status | How |
-| ------- | ------ | --- |
-| Apps reach only their own BFF, and only through `api-client.ts` | Enforced | `scripts/check-boundaries.mjs` (`pnpm lint`, run in CI) |
-| Services can't import other services, apps, `fs`, or DB/cloud SDKs | Enforced | Boundary check |
-| `backend-common` can't import services or apps; vendor shapes stay inside their connector | Enforced | Boundary check |
-| Services see only `backend-common`'s public API | Enforced | `exports` exposes only `dist/index.js`, and the boundary check blocks relative imports across packages |
-| Every service gets CORS, audit, identity, logging and the error envelope | Enforced | `createServiceApp` sets them up centrally; services don't add middleware by hand |
-| Malformed input never reaches a connector | Enforced per route | Zod schemas with `parseOrThrow` / `validateBody`, covered by contract tests |
-| Every PR is linted, built and tested | Enforced | `.github/workflows/ci.yml` |
-| Red-zone changes need platform review | Documented | `CODEOWNERS` exists. It blocks merges only once branch protection on `main` requires code-owner review and the CI check (a GitHub setting, not in the repo). |
-| Every mutating `/api` route has a permission guard and a schema | Documented | Today it's a convention. To productize: register routes through a `defineRoute({ method, path, permission, body })` helper, so a missing guard is a type error, plus a test that walks each router and fails on an unguarded mutating route. |
-| Services can't turn off audit or identity | Documented | `createServiceApp` still accepts `audit: false` / `identity: false`. To productize: have the boundary check reject them under `services/*`. |
-| Mock identity and local adapters never run in production | Documented | To productize: `createServiceApp` and `initializeConnectors` refuse to start with the mock identity or disk/memory adapters when `NODE_ENV=production`. |
-
-### Sharing the platform with production services
-
-Much of `packages/backend-common` isn't specific to internal apps. The service bootstrap, error envelope, RBAC guards, audit delta engine, Zod validation helpers and connector *interfaces* could be reused by the production services engineering already maintains. The productized path:
-
-1. **Split the package.** A domain-agnostic `platform-kernel` (HTTP bootstrap, auth, audit, validation) would be versioned and consumable outside this monorepo. A separate `connectors` package would hold the interfaces (`ILedgerDatabase`, `IKycVendorClient`, `IFeatureFlagProvider`) and the local adapters.
-2. **Swap implementations, not call sites.** Production would provide a real identity middleware through `createServiceApp({ identity })`, a log shipper in place of stdout, and Postgres or vendor-API adapters behind the same connector interfaces. Routes and screens would not change.
-3. **Keep the zones.** The kernel would stay platform-owned, so internal-app work and production services would get the same guardrails from one reviewed source.
 
 ## Layout
 
@@ -96,246 +70,8 @@ packages/
   shared-types/           Zod client-row contracts + inferred types and DTOs (only dependency: zod)
   ui-shared/              Shared frontend: design system, schema-validating apiClient, Query root, <CoreDataTable />
 scripts/
-  check-boundaries.mjs    Enforces the import rules below (`pnpm lint:boundaries`)
+  check-boundaries.mjs    Enforces the import boundaries (`pnpm lint:boundaries`)
   reset-data.mjs          Wipes local data (`pnpm data:reset`)
-```
-
-## The BFF architecture
-
-```text
- apps/compliance ──HTTP──▶ services/compliance ─┐
- apps/finance    ──HTTP──▶ services/finance    ─┼──▶ packages/backend-common ──▶ data/*.json
- apps/engineering──HTTP──▶ services/engineering─┘
-        │                         │                          │
-        └──────────────── packages/shared-types ─────────────┘
-```
-
-Each frontend in `apps/` has one service in `services/` with the same name, and that service exists
-only to serve it. The service is the **only backend its frontend talks to**, and it shapes its
-responses around what that frontend's screens need. Code that is, or could be, used by more than one
-surface goes in `packages/backend-common`.
-
-### Rules
-
-These rules are architectural. `pnpm lint:boundaries` enforces them, and `pnpm check` runs them too.
-
-1. **`apps/*`: UI only.**
-   - Apps contain no database logic and make no direct third-party calls.
-   - An app talks only to its own BFF, over HTTP, through the `apiClient` it builds in `src/common/api-client.ts` with ui-shared's `createApiClient`. Every response is parsed against its `@platform/shared-types` Zod schema (`apiClient.getParsed(url, schema)`); a mismatch throws `SchemaMismatchError`. App source never calls `fetch` (`packages/ui-shared/src/api/api-client.ts` is the only caller). The BFF URL comes from `NEXT_PUBLIC_BFF_URL`.
-   - Apps may import `@platform/shared-types` and `ui-shared` (`"ui-shared": "workspace:*"`, required). They may not import `backend-common`, any service, Node built-ins, or DB/cloud SDKs.
-   - Server state is TanStack Query only: no `useEffect` in app source, and `useQuery`/`useMutation` live in `src/features/<feature>/api/`. Mutations invalidate their feature's query keys on success.
-2. **`services/*`: one BFF per app.**
-   - A service receives requests from its paired app, runs that domain's business rules, and returns payloads shaped for that app's screens.
-   - CORS only allows the paired app's origin (`APP_ORIGINS`).
-   - Services may import `@platform/backend-common` and `@platform/shared-types`. They never import another service or an app. If two services need the same code, move it into `backend-common`.
-3. **`packages/backend-common`: closed and shared.**
-   - It may import npm packages and `@platform/shared-types`, and nothing else from the workspace.
-   - It knows nothing about any service or app and must never import from `services/*` or `apps/*`.
-   - It holds surface-agnostic building blocks: the Express service bootstrap, the error envelope, logging, config, local storage, the generic domain types (`src/domain`) and the connectors.
-4. **`packages/shared-types`: pure contracts.**
-   - Its only dependency is `zod`, and it has no runtime code beyond Zod schemas and type-adjacent constants.
-   - `src/contracts/*` holds the Zod client-row contracts; their TypeScript types are inferred from them, never hand-written.
-   - `src/common.ts` holds cross-cutting types (`ApiErrorBody`, `HealthResponse`, `ValidationIssue`).
-   - `src/dto/<surface>.ts` holds the screen-shaped request/response types for each app↔BFF pair.
-   - It holds only what clients see. Backend domain types and vendor shapes never go here (see [Data types](#data-types-vendor-edge--domain--client-row)).
-5. **Relative imports never cross a workspace package.** Go through the package's public entry point (`@platform/...`).
-
-### Where does new code go?
-
-| You are adding…                                              | Put it in                                  |
-| ------------------------------------------------------------ | ------------------------------------------ |
-| A screen or component for one team                           | `apps/<team>/src/features/<feature>/`      |
-| A useQuery / useMutation hook for that screen                | `apps/<team>/src/features/<feature>/api/`  |
-| A UI pattern, primitive or hook needed by 2+ apps            | `packages/ui-shared/src/`                  |
-| An endpoint, a business rule, or response shaping for that screen | `services/<team>/src/routes/` (+ `policy/`, `presenters/` as it grows) |
-| A request/response type for that endpoint                    | `packages/shared-types/src/dto/<team>.ts`  |
-| A store, an integration mock, or a rule needed by 2+ services | `packages/backend-common/src/<module>/`    |
-| A generic (vendor-agnostic) domain type                      | `packages/backend-common/src/domain/`      |
-| A new vendor behind an existing connector                    | `packages/backend-common/src/connectors/<x>/vendors/<vendor>.ts` |
-| A shadcn/ui primitive                                        | `pnpm dlx shadcn@latest add <component>` inside `packages/ui-shared` (rewrite `@/lib/utils` to `../../lib/utils`) |
-
-## Local storage (no database)
-
-`packages/backend-common` has one storage engine, `JsonCollection` (`src/connectors/json-collection.ts`).
-It sits behind every connector below and is internal to the package. A collection is a versioned JSON
-document (`{ schemaVersion, records }`). It is read and written asynchronously, and changed only through
-all-or-nothing `mutate()` calls.
-
-- **File mode** (the default, `PLATFORM_STORAGE=file`) keeps each collection in
-  `packages/backend-common/data/<name>.json` (override the folder with `PLATFORM_DATA_DIR`).
-  Writes are atomic (temp file, then rename) and take a cross-process `<file>.lock`, so several services
-  can safely share a file.
-- **Memory mode** (`PLATFORM_STORAGE=memory`) keeps each collection inside its instance and never touches
-  disk. Data is seeded the same way and lost on restart. It is meant for tests and demos.
-- If a `mutate()` callback throws, nothing is written. Records are validated against the collection's
-  schema before every write and after every read.
-- `mutate()` callbacks must be synchronous. If a callback returns a Promise, the call rejects and nothing
-  is written. Do any async work (HTTP, provider calls) before or after the mutation.
-- A lock is treated as stale only when the process that owns it has died. A writer that finds it no longer
-  owns its lock aborts instead of overwriting someone else's commit.
-
-Run `pnpm data:reset` to delete all local data; collections are re-seeded on next access.
-
-## Service & database connectors
-
-In production each BFF would talk to a PostgreSQL cluster or a SaaS vendor API. Locally, those
-dependencies are replaced by **connectors**: interfaces in `backend-common/src/connectors`, backed by
-async (`fs/promises`) JSON-file drivers, so everything works with zero credentials.
-
-| Connector interface    | Hub factory                | Used by                | Domain type       | Vendor mocks (`packages/backend-common/data/`) |
-| ---------------------- | -------------------------- | ---------------------- | ----------------- | ---------------------------------------------- |
-| `ILedgerDatabase`      | `getLedgerDatabase()`      | `services/finance`     | `Refund`          | `stripe-refunds.json`, `paypal-refunds.json` |
-| `IKycVendorClient`     | `getKycVendorClient()`     | `services/compliance`  | `KycVerification` | `persona-inquiries.json`, `alloy-evaluations.json` |
-| `IFeatureFlagProvider` | `getFeatureFlagProvider()` | `services/engineering` | `FeatureFlag`     | `launchdarkly-flags.json`, `unleash-features.json` |
-
-- **Hub only.** Services resolve connectors through the hub factories and pass them to their routers as
-  `ApiDependencies`. The `Disk*` drivers are not exported, and `pnpm lint:boundaries` rejects `fs` imports
-  in `services/*/src`, so handlers never see file paths or the storage driver.
-- **One adapter per vendor.** Each connector reads and writes every vendor it fronts and merges the
-  results. Refunds are stored with the processor of their original charge (`processor`); KYC
-  verifications and flags stay with the vendor that holds them.
-- **Seeding.** If a data file is missing (first boot, or after `pnpm data:reset`), the driver creates the
-  directory and seeds it with realistic mock data in that vendor's shape (15+ records per connector). Services call
-  `initializeConnectors([...])` at boot so seeding happens before the first request.
-- **Simulated latency.** Every read and write waits a pseudo-random 50–150 ms
-  (`PLATFORM_SIMULATED_LATENCY_MS`, e.g. `80`, `20-60` or `off`) so frontends show their loading states.
-- **Errors.** Unknown ids → `NOT_FOUND` (404); blank ids or invalid input → `BUSINESS_RULE_VIOLATION`
-  (422); deciding an already-finalised KYC applicant → `CONFLICT` (409). All use the shared error envelope.
-  Unreadable or corrupt data files raise `ConnectorError`, which is logged and returned as a 500.
-- **Storage.** Every driver is a `JsonCollection` (see [Local storage](#local-storage-no-database)), so
-  `PLATFORM_STORAGE=memory` runs all three connectors without touching disk.
-- **Tests.** Call `configureConnectors({ mode: "memory", latency: false })` (or `{ dataDir, latency: false }`)
-  before resolving connectors, or pass fakes to a service's `createApp({ dependencies })`.
-
-## Data types: vendor edge → domain → client row
-
-Each piece of data has three types, and each layer only sees its own:
-
-```text
- StripeRefund / PayPalRefund        Refund              RefundTransactionRow
- PersonaInquiry / AlloyEvaluation → KycVerification  →  KycReviewRow
- LaunchDarklyFlag / UnleashFeature  FeatureFlag         FeatureFlagRow
- ───────────────────────────────    ───────────────     ─────────────────────
- edge: one per vendor, private to   generic domain:     client-only row: Zod schema
- backend-common/src/connectors/     backend-common/     in shared-types, built by the
- <x>/vendors, validated on disk     src/domain          BFF's presenter, sent to the app
-```
-
-- **Edge → domain** (connector adapters). Each vendor module defines its Zod schema (and
-  `z.infer` type) and a lossless `toDomain` / `toEdge` pair. The vendor's units, enums, casing,
-  timestamps and metadata conventions stop here. `pnpm lint:boundaries` rejects imports of
-  `connectors/<x>/vendors/*` from anywhere else. Adding a vendor means adding one adapter;
-  services and apps don't change.
-- **Domain → row** (`services/<team>/src/presenters`). The BFF maps the generic type to the
-  row its screen needs and parses it with the row schema before responding, so a mapping bug
-  is a logged 500 instead of a malformed payload.
-- **Apps** import only the row types and DTOs from `shared-types`. They never see domain or
-  vendor types.
-
-| Endpoint                      | Role needed            | Response (`dto/<team>.ts`) |
-| ----------------------------- | ---------------------- | -------------------------- |
-| `GET /api/refunds` (finance)  | `finance` · `read`     | `RefundTransactionsResponse { rows: RefundTransactionRow[] }` |
-| `GET /api/kyc/verifications` (compliance) | `compliance` · `read` | `KycReviewQueueResponse { rows: KycReviewRow[] }` |
-| `GET /api/feature-flags` (engineering) | `engineering` · `read` | `FeatureFlagsResponse { rows: FeatureFlagRow[] }` |
-
-## Strict runtime data contracts
-
-The client-row contracts are Zod schemas in `packages/shared-types/src/contracts`. Each schema is the
-single source of truth for its type: services validate against the schema, and apps and services
-import the type that `z.infer` derives from it.
-
-| Schema                       | Inferred type          | Surface            | Notable rules |
-| ---------------------------- | ---------------------- | ------------------ | ------------- |
-| `kycReviewRowSchema`         | `KycReviewRow`         | `apps/compliance`  | status `PENDING`/`APPROVED`/`REJECTED`, `documentUrl` absolute http(s) URL, `riskScore` 0–100, `notes` optional (defaults to `""`) |
-| `refundTransactionRowSchema` | `RefundTransactionRow` | `apps/finance`     | `amount` > 0 (major units), status `PENDING_APPROVAL`/`PROCESSED`/`FAILED`, `currency` 3 letters (upper-cased), `createdTimestamp` ISO-8601, `approvalsReceived` distinct (defaults to `[]`) |
-| `featureFlagRowSchema`       | `FeatureFlagRow`       | `apps/engineering` | `key` snake_case, `targetedTiers` distinct, `updatedAt` ISO-8601 |
-
-- Every text field is trimmed before it is checked, so a whitespace-only value counts as empty. Ids are
-  URL-safe (`[A-Za-z0-9_-]`, UUIDs included). Unknown keys are stripped.
-- Each schema also exports its status enum (`KYC_REVIEW_STATUSES`, `REFUND_TRANSACTION_STATUSES`).
-
-`validateBody(schema)` from `backend-common` enforces a contract at the Express boundary. On
-POST/PUT/PATCH it parses `req.body`, replaces it with the parsed output, and types `req.body` as the
-schema's output in the handlers after it. Other methods pass through.
-
-```ts
-router.post("/v1/refunds", auditAction("CREATE_REFUND"), requirePermission("finance", "execute"),
-  validateBody(refundTransactionRowSchema), async (req, res) => {
-    req.body.currency; // string, already trimmed and upper-cased
-  });
-```
-
-An invalid or missing body stops the request with HTTP 400 before any handler or connector runs. It uses
-the shared error envelope, with field-level issues in `details` (`ValidationErrorDetails`):
-
-```json
-{ "error": { "code": "VALIDATION_FAILED", "message": "Request body failed validation",
-  "details": { "issues": [{ "path": ["currency"], "field": "currency", "code": "invalid_format",
-    "message": "Must be a 3-letter ISO-4217 currency code, e.g. USD" }] } } }
-```
-
-Apps receive it as an `ApiRequestError` with code `VALIDATION_FAILED`, and the audit trail records it as a
-`VALIDATION_FAILED` failure.
-
-## Security posture
-
-There is no real authentication yet. Services bind to `127.0.0.1` by default (`HOST`), and CORS only limits which browsers can read responses; it does not authenticate callers. Replace the mock identity middleware below with real authentication before you expose a BFF beyond the local machine.
-
-## Access control (RBAC)
-
-`backend-common` ships a role-based access control engine (`packages/backend-common/src/auth`); the role and user types live in `shared-types` (`UserRole`, `AuthenticatedUser`).
-
-| Role                 | compliance (KYC)   | finance (Refunds)  | engineering (Feature flags) |
-| -------------------- | ------------------ | ------------------ | --------------------------- |
-| `admin`              | everything         | everything         | everything                  |
-| `compliance_analyst` | `read`, `approve`  | —                  | —                           |
-| `finance_analyst`    | —                  | `read`, `execute`  | —                           |
-| `engineer`           | —                  | —                  | `read`, `toggle`            |
-
-The matrix is declared once in `PERMISSIONS` (`auth/permissions.ts`).
-
-**Mock identity injection.** With no identity provider, `injectMockUser` reads the `x-authenticated-user-role` header and attaches the matching mock profile to `req.user`. If the header is missing on a GET/HEAD/OPTIONS request it uses `finance_analyst` and logs a warning to stdout (once per process). If it's missing on a mutating request (POST/PATCH/PUT/DELETE…) the request gets a 400. This matters because a browser can send a cross-site form POST without custom headers, so a default role there would let any web page trigger actions on a local BFF. An unknown role gets a 400. Any caller can claim any role, so this is for local development only.
-
-**Route guards.** `requirePermission(resource, action)` lets the request through only if `req.user.role` is allowed to do that action on that resource. Otherwise it passes `HttpError(403, "FORBIDDEN", …)` to the shared error handler, so the response uses the standard envelope: `403 { "error": { "code": "FORBIDDEN", "message": "User role does not possess required permissions for this action." } }`. It also denies requests when no identity middleware has run (fails closed). The apps' API client needs no special case; the denial surfaces as `ApiRequestError(403, "FORBIDDEN", message)` and the feature's error panel shows it. Resource and action names are type-checked, so `requirePermission("finance", "toggle")` won't compile.
-
-**Where identity is mounted.** `createServiceApp` mounts identity on `/api` ahead of the service's routes, so each service only calls `app.use("/api", createApiRouter())`. `/health` and anything else outside `/api` never sees it. The `identity` option defaults to `injectMockUser`. Pass a different middleware to replace it (e.g. real auth later), or `false` to turn it off.
-
-Every service exposes placeholder probes from `createAccessCheckRouter(resource)`: `GET /api/access/read` and `POST /api/access/<approve|execute|toggle>`. Each app's top bar has a role dropdown. The choice is kept in a `mock-user-role` cookie, which is shared by all apps on localhost, and ui-shared's `mockIdentityHeaders` sends it as the header. Switching roles resets every cached query, so each screen re-fetches as the new role (403s render inline). The probes remain for manual `curl` checks.
-
-```ts
-import { createServiceApp, requirePermission } from "@platform/backend-common";
-
-createServiceApp({ name, allowedOrigins, routes: (app) => app.use("/api", router) }); // identity: injectMockUser by default
-router.get("/refunds", requirePermission("finance", "read"), listRefunds);
-router.post("/refunds/:id/execute", requirePermission("finance", "execute"), executeRefund);
-```
-
-## Audit trail
-
-Every POST, PUT, PATCH and DELETE handled by any BFF writes one audit line to stdout as single-line JSON. In production a log agent such as Datadog Agent or Fluent Bit would scrape these lines and ship them to immutable storage. The engine is in `packages/backend-common/src/audit`. `createServiceApp` mounts `auditLogger` for every service and uses the service `name` as `targetService`. To customise it, pass `audit: { ... }`. To turn it off, pass `audit: false`.
-
-```json
-{"kind":"audit","timestamp":"2026-11-01T12:00:00.000Z","actorId":"mock-finance_analyst","actorRole":"finance_analyst","targetService":"finance-service","endpoint":"/api/v1/refunds/:id/execute","action":"EXECUTE_REFUND","status":"SUCCESS","delta":{"oldValue":{"status":"PENDING"},"newValue":{"status":"EXECUTED"}},"method":"POST","httpStatus":200,"requestId":"…","durationMs":3.2}
-```
-
-- **Outcome.** 2xx and 3xx responses are `SUCCESS`. 4xx and 5xx responses are `FAILED`, and `error` is taken from the response body. That covers zod/`parseOrThrow` 400s, RBAC 403s, unknown roles, malformed JSON and unknown routes. A client disconnect is recorded as `FAILED` with `CLIENT_CLOSED_REQUEST`. Calling `useAudit(req).fail(err)` forces `FAILED`.
-- **Actor.** The actor comes from `req.user`. If the request is rejected before an identity is attached, the actor is `anonymous`.
-- **Delta.** `computeDelta(old, new)` is pure. A create gives `{ oldValue: null, newValue: <record> }`. A delete gives `{ oldValue: <record>, newValue: null }`. An update keeps only the changed keys on both sides and keeps the nested structure. Keys such as `password`, `token` and `cardNumber` (see `DEFAULT_REDACT_KEYS`) are written as `"[REDACTED]"`.
-- **Non-blocking.** The line is written with `setImmediate` after the response is sent. If auditing throws, the error is logged and the request is unaffected.
-
-Handlers add business context. `auditAction` names the action and should come first so that RBAC and validation failures are still labelled. `useAudit(req)` returns the trail for recording snapshots. It throws if the audit middleware isn't mounted, so a mutation can't silently skip its audit line. Snapshots are synchronous copies, so take them right after reading and right after writing through the connector:
-
-```ts
-import { auditAction, requirePermission, useAudit } from "@platform/backend-common";
-
-router.post("/v1/refunds/:id/execute", auditAction("EXECUTE_REFUND"), requirePermission("finance", "execute"), async (req, res) => {
-  const audit = useAudit(req);
-  const id = String(req.params.id);
-  audit.before(await deps.ledger.findById(id));
-  const refund = await deps.ledger.updateRecord(id, { status: "approved" });
-  audit.after(refund);
-  res.json(refund);
-});
 ```
 
 ## Getting started
@@ -396,7 +132,7 @@ Every check that CI runs also runs locally. `pnpm test` from the root runs every
 
 The contract tests cover these cases:
 
-- **403 from the route guard.** `finance_analyst` and `engineer` get `403 FORBIDDEN` on `GET /api/kyc/verifications` and on `POST /api/kyc/verifications/:applicantId/decisions`. A read with no `x-authenticated-user-role` header falls back to `finance_analyst` and is also rejected with 403. A *mutation* with no header is rejected earlier with `400 BAD_REQUEST`, by design, because cross-site form POSTs can't set custom headers (see [Access control](#access-control-rbac)).
+- **403 from the route guard.** `finance_analyst` and `engineer` get `403 FORBIDDEN` on `GET /api/kyc/verifications` and on `POST /api/kyc/verifications/:applicantId/decisions`. A read with no `x-authenticated-user-role` header falls back to `finance_analyst` and is also rejected with 403. A *mutation* with no header is rejected earlier with `400 BAD_REQUEST`, by design, because cross-site form POSTs can't set custom headers.
 - **400 from Zod validation.** A missing or unknown `outcome`, a blank or non-string `reason`, unknown keys (including a client-supplied `reviewerId`), a non-object body, a missing body, or malformed JSON all stop with `400` before the connector is called. Schema failures return `VALIDATION_FAILED` and the Zod issues in `error.details`. Schemas live next to their routes (`services/compliance/src/routes/schemas.ts`) and are applied with `parseOrThrow`.
 
 ### Turborepo task graph
@@ -419,39 +155,3 @@ test      -> ^build                           (suites import workspace deps from
 4. `pnpm build` and `pnpm test` run with `--affected` on pull requests, so only workspaces changed against the base branch, and the workspaces that depend on them, are built and tested. Pushes to `main` verify the whole graph.
 
 CI runs with `PLATFORM_SIMULATED_LATENCY_MS=off`. The connector suites write to their own temp directories, never to `packages/backend-common/data/`. A newer run on the same PR cancels the older one.
-
-## Anatomy of a surface
-
-```text
-packages/ui-shared/src/   Shared frontend infrastructure (TypeScript source, transpiled by each app)
-  styles/globals.css      Tailwind v4 + shadcn tokens: compact density, light/dark variables (`ui-shared/styles.css`)
-  components/ui/          shadcn/ui primitives (radix-vega style; add more with `pnpm dlx shadcn add` here)
-  api/                    createApiClient → getParsed / postParsed (Zod-validated), ApiRequestError, SchemaMismatchError
-  query/                  QueryProvider (QueryClient defaults), runBatch for bulk mutations
-  data-table/             <CoreDataTable<TData, TValue> /> on TanStack Table v9: sorting, column + global
-                          filtering, pagination, row selection; createCoreColumnHelper, selectionColumn
-  shell/ theme/ identity/ AppShell, PageHeader, StatCard, BffHealthBadge, ReasonDialog, ThemeToggle, mock role
-
-apps/<team>/src/          (Pages Router; only these four layers are allowed)
-  app/                    Global wrappers: providers.tsx (QueryProvider, Toaster), app-frame.tsx, globals.css
-  pages/                  Thin routes: _app.tsx, _document.tsx (theme init), index.tsx mounts the feature
-  common/                 App-local shared code: api-client.ts (the paired BFF), surface.ts
-  features/<feature>/     Domain screens; api/ holds every useQuery/useMutation hook and query keys
-                          (compliance: kyc-queue, finance: refunds-panel, engineering: feature-flags)
-
-services/<team>/src/
-  index.ts                Process entry point (port, graceful shutdown)
-  app.ts                  createServiceApp(): CORS, audit, JSON, logging, /health, identity on /api, 404, error envelope
-  config.ts               PORT / APP_ORIGINS
-  routes/index.ts         Screen-shaped endpoints mounted at /api
-```
-
-Every service returns errors in the same envelope, `{ "error": { "code", "message", "details?" } }`
-(`ApiErrorBody`). Apps receive these errors as `ApiRequestError`.
-
-**Throw:**
-
-- `HttpError` for request-level failures.
-- `DomainError` for violated invariants.
-
-**Validate:** mount `validateBody(schema)` on body-carrying routes (see [Strict runtime data contracts](#strict-runtime-data-contracts)). For other input, such as query params, pass any `safeParse`-compatible schema to `parseOrThrow`.
